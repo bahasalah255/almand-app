@@ -11,6 +11,14 @@
     },
     "android": {
       "package": "com.almandapp"
-    }
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "sounds": ["./assets/sounds/notification.mp3"]
+        }
+      ]
+    ]
   }
 }
