@@ -66,18 +66,16 @@ export default function SplashScreen({ navigation }) {
         }}
       />
 
-      <Animated.Text
+      <Animated.Image
+        source={require('../assets/tab.png')}
         style={{
           marginTop: 20,
-          fontSize: 18,
-          fontWeight: '600',
-          color: '#9090A0',
-          letterSpacing: 1.5,
+          width: 120,
+          height: 28,
+          resizeMode: 'contain',
           opacity: textOpacity,
         }}
-      >
-        By R-tbawi
-      </Animated.Text>
+      />
     </Animated.View>
   );
 }

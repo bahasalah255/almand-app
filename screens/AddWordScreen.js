@@ -16,6 +16,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { refreshScheduledNotificationsIfEnabled } from '../utils/notifications';
+import { useLanguage } from '../utils/LanguageContext';
 
 const STORAGE_KEY = 'words';
 
@@ -42,6 +44,7 @@ function shakeAnim(value) {
 
 export default function AddWordScreen() {
   const navigation = useNavigation();
+  const { t, isRTL } = useLanguage();
 
   const [article,     setArticle]     = useState(null);
   const [word,        setWord]        = useState('');
@@ -102,6 +105,7 @@ export default function AddWordScreen() {
         ...(example.trim() ? { example: example.trim() } : {}),
       };
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify([newEntry, ...existing]));
+      await refreshScheduledNotificationsIfEnabled();
       navigation.goBack();
     } catch {
       setSaving(false);
@@ -116,7 +120,7 @@ export default function AddWordScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         {/* ── Header ── */}
-        <View style={styles.header}>
+        <View style={[styles.header, isRTL && { flexDirection: 'row-reverse' }]}>
           <TouchableOpacity
             style={styles.backBtn}
             onPress={() => navigation.goBack()}
@@ -124,7 +128,7 @@ export default function AddWordScreen() {
           >
             <Ionicons name="chevron-back" size={18} color="#1A1A2E" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>New word</Text>
+          <Text style={styles.headerTitle}>{t('addWord.headerTitle')}</Text>
           <View style={styles.headerRight} />
         </View>
 
@@ -136,19 +140,21 @@ export default function AddWordScreen() {
         >
           {/* Title block */}
           <View style={styles.titleBlock}>
-            <Text style={styles.pageTitle}>Add a new word</Text>
-            <Text style={styles.pageSubtitle}>
-              Pick the article color — it'll help you remember.
+            <Text style={[styles.pageTitle, isRTL && { textAlign: 'right' }]}>
+              {t('addWord.pageTitle')}
+            </Text>
+            <Text style={[styles.pageSubtitle, isRTL && { textAlign: 'right' }]}>
+              {t('addWord.pageSubtitle')}
             </Text>
           </View>
 
           {/* ── Article selector ── */}
           <Animated.View style={{ transform: [{ translateX: articleShake }] }}>
-            <View style={styles.sectionLabelRow}>
-              <Text style={[styles.sectionLabel, articleError && styles.labelError]}>
-                ARTICLE
+            <View style={[styles.sectionLabelRow, isRTL && { flexDirection: 'row-reverse' }]}>
+              <Text style={[styles.sectionLabel, articleError && styles.labelError, isRTL && { textAlign: 'right' }]}>
+                {t('addWord.articleLabel')}
               </Text>
-              <Text style={styles.sectionHint}>tap to choose</Text>
+              <Text style={styles.sectionHint}>{t('addWord.tapToChoose')}</Text>
             </View>
             <View style={[styles.articleRow, articleError && styles.articleRowError]}>
               {ARTICLES.map((art) => {
@@ -192,11 +198,13 @@ export default function AddWordScreen() {
           <View style={styles.fieldsBlock}>
             {/* German word */}
             <Animated.View style={{ transform: [{ translateX: wordShake }] }}>
-              <Text style={styles.fieldLabel}>GERMAN WORD</Text>
+              <Text style={[styles.fieldLabel, isRTL && { textAlign: 'right' }]}>
+                {t('addWord.germanWordLabel')}
+              </Text>
               <TextInput
-                style={[styles.input, { borderColor: wordBorderColor }]}
+                style={[styles.input, { borderColor: wordBorderColor }, isRTL && { textAlign: 'right' }]}
                 value={word}
-                onChangeText={(t) => { setWord(t); setWordError(false); }}
+                onChangeText={(txt) => { setWord(txt); setWordError(false); }}
                 onFocus={() => setFocusedField('word')}
                 onBlur={() => setFocusedField(null)}
                 autoCapitalize="words"
@@ -207,28 +215,32 @@ export default function AddWordScreen() {
 
             {/* Translation */}
             <Animated.View style={{ transform: [{ translateX: translationShake }] }}>
-              <Text style={styles.fieldLabel}>TRANSLATION</Text>
+              <Text style={[styles.fieldLabel, isRTL && { textAlign: 'right' }]}>
+                {t('addWord.translationLabel')}
+              </Text>
               <TextInput
-                style={[styles.input, { borderColor: translationBorderColor }]}
+                style={[styles.input, { borderColor: translationBorderColor }, isRTL && { textAlign: 'right' }]}
                 value={translation}
-                onChangeText={(t) => { setTranslation(t); setTranslationError(false); }}
+                onChangeText={(txt) => { setTranslation(txt); setTranslationError(false); }}
                 onFocus={() => setFocusedField('translation')}
                 onBlur={() => setFocusedField(null)}
                 autoCapitalize="none"
                 returnKeyType="next"
-                placeholder="e.g. the book"
+                placeholder={t('addWord.translationHint')}
                 placeholderTextColor="#C0C0D0"
               />
             </Animated.View>
 
             {/* Example — optional */}
             <View>
-              <View style={styles.fieldLabelRow}>
-                <Text style={styles.fieldLabel}>EXAMPLE</Text>
-                <Text style={styles.fieldLabelOptional}> · optional</Text>
+              <View style={[styles.fieldLabelRow, isRTL && { flexDirection: 'row-reverse' }]}>
+                <Text style={[styles.fieldLabel, isRTL && { textAlign: 'right' }]}>
+                  {t('addWord.exampleLabel')}
+                </Text>
+                <Text style={styles.fieldLabelOptional}> · {t('common.optional')}</Text>
               </View>
               <TextInput
-                style={[styles.input, styles.textArea, { borderColor: '#E8E8F0' }]}
+                style={[styles.input, styles.textArea, { borderColor: '#E8E8F0' }, isRTL && { textAlign: 'right' }]}
                 value={example}
                 onChangeText={setExample}
                 onFocus={() => setFocusedField('example')}
@@ -237,7 +249,7 @@ export default function AddWordScreen() {
                 numberOfLines={3}
                 textAlignVertical="top"
                 autoCapitalize="sentences"
-                placeholder="Add a sentence using this word..."
+                placeholder={t('addWord.exampleHint')}
                 placeholderTextColor="#C0C0D0"
               />
             </View>
@@ -259,7 +271,7 @@ export default function AddWordScreen() {
               style={styles.saveGradient}
             >
               <Text style={styles.saveLabel}>
-                {saving ? 'Saving…' : 'Save word'}
+                {saving ? t('addWord.saving') : t('addWord.saveWord')}
               </Text>
             </LinearGradient>
           </TouchableOpacity>

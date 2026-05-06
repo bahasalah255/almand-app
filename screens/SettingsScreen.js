@@ -9,6 +9,8 @@ import {
   Alert,
   ActivityIndicator,
   Linking,
+  Modal,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -22,14 +24,10 @@ import {
   saveNotificationSettings,
 } from '../utils/notifications';
 import { loadProgress } from '../utils/progress';
+import { useLanguage } from '../utils/LanguageContext';
 
 const APP_SETTINGS_KEY = 'appSettings';
-
-const FREQ_OPTIONS = [
-  { id: '5min',  label: 'Every 5 min' },
-  { id: '30min', label: 'Every 30 min' },
-  { id: 'daily', label: 'Daily' },
-];
+const PROFILE_NAME_KEY = 'profileName';
 
 const DEFAULT_APP_SETTINGS = {
   dailyGoal:    5,
@@ -58,14 +56,25 @@ function useSettings() {
 }
 
 export default function SettingsScreen() {
+  const { t, isRTL, language, setLanguage } = useLanguage();
+
   const [notifEnabled, setNotifEnabled] = useState(false);
   const [frequency, setFrequency]       = useState('daily');
   const [permDenied, setPermDenied]     = useState(false);
   const [applying, setApplying]         = useState(false);
   const [loading, setLoading]           = useState(true);
   const [streak, setStreak]             = useState(0);
+  const [profileName, setProfileName]   = useState('Guest');
+  const [editName, setEditName]         = useState('');
+  const [editing, setEditing]           = useState(false);
 
   const { settings, updateSetting } = useSettings();
+
+  const FREQ_OPTIONS = [
+    { id: '5min',  label: t('settings.every5min') },
+    { id: '30min', label: t('settings.every30min') },
+    { id: 'daily', label: t('settings.daily') },
+  ];
 
   useFocusEffect(
     useCallback(() => {
@@ -79,6 +88,18 @@ export default function SettingsScreen() {
       );
     }, [])
   );
+
+  // Load profile name from storage on mount
+  useEffect(() => {
+    let active = true;
+    AsyncStorage.getItem(PROFILE_NAME_KEY).then((raw) => {
+      if (!active) return;
+      if (raw) setProfileName(raw);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const applyAndSave = async (newEnabled, newFreq) => {
     setApplying(true);
@@ -110,22 +131,26 @@ export default function SettingsScreen() {
   };
 
   const showGoalPicker = () => {
-    Alert.alert('Daily goal', 'How many words per day?', [
-      { text: '3 words',  onPress: () => updateSetting('dailyGoal', 3) },
-      { text: '5 words',  onPress: () => updateSetting('dailyGoal', 5) },
-      { text: '10 words', onPress: () => updateSetting('dailyGoal', 10) },
-      { text: '20 words', onPress: () => updateSetting('dailyGoal', 20) },
-      { text: 'Cancel',   style: 'cancel' },
+    const goalOptions = t('settings.goalOptions');
+    const goalValues  = t('settings.goalValues');
+    Alert.alert(t('settings.goalTitle'), t('settings.goalMsg'), [
+      ...goalOptions.map((label, i) => ({
+        text: label,
+        onPress: () => updateSetting('dailyGoal', goalValues[i]),
+      })),
+      { text: t('common.cancel'), style: 'cancel' },
     ]);
   };
 
   const showQuizLengthPicker = () => {
-    Alert.alert('Quiz length', 'How many questions per session?', [
-      { text: '5 questions',  onPress: () => updateSetting('quizLength', 5) },
-      { text: '10 questions', onPress: () => updateSetting('quizLength', 10) },
-      { text: '15 questions', onPress: () => updateSetting('quizLength', 15) },
-      { text: '20 questions', onPress: () => updateSetting('quizLength', 20) },
-      { text: 'Cancel',       style: 'cancel' },
+    const quizOptions = t('settings.quizOptions');
+    const quizValues  = t('settings.quizValues');
+    Alert.alert(t('settings.quizTitle'), t('settings.quizMsg'), [
+      ...quizOptions.map((label, i) => ({
+        text: label,
+        onPress: () => updateSetting('quizLength', quizValues[i]),
+      })),
+      { text: t('common.cancel'), style: 'cancel' },
     ]);
   };
 
@@ -148,46 +173,123 @@ export default function SettingsScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* ── Page title ── */}
-        <Text style={styles.pageTitle}>Settings</Text>
+        <Text style={[styles.pageTitle, isRTL && { textAlign: 'right' }]}>
+          {t('settings.title')}
+        </Text>
 
         {/* ── Profile card ── */}
-        <LinearGradient
-          colors={['#7B61FF', '#C850C0', '#FF6B9D']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 0 }}
-          style={styles.profileCard}
-        >
-          <View style={styles.avatar}>
-            <Text style={styles.avatarLetter}>L</Text>
-          </View>
+        <TouchableOpacity activeOpacity={0.85} onPress={() => { setEditName(profileName); setEditing(true); }}>
+          <LinearGradient
+            colors={['#7B61FF', '#C850C0', '#FF6B9D']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.profileCard}
+          >
+            <View style={styles.avatar}>
+              <Text style={styles.avatarLetter}>{(profileName && profileName[0]) ? profileName[0].toUpperCase() : 'G'}</Text>
+            </View>
 
-          <View style={styles.profileInfo}>
-            <Text style={styles.profileName}>Lina</Text>
-            <View style={styles.profileSubRow}>
-              <Text style={styles.profileSub}>
-                A1 · Beginner · {streak} day streak
-              </Text>
-              <Ionicons name="flame" size={14} color="#FF9500" style={styles.flameIcon} />
+            <View style={styles.profileInfo}>
+              <Text style={styles.profileName}>{profileName || 'Guest'}</Text>
+              <View style={[styles.profileSubRow, isRTL && { flexDirection: 'row-reverse' }]}>
+                <Text style={styles.profileSub}>
+                  A1 · {t('settings.level')} · {t('settings.dayStreak', { n: streak })}
+                </Text>
+                <Ionicons name="flame" size={14} color="#FF9500" style={styles.flameIcon} />
+              </View>
+            </View>
+
+            <View style={styles.profileArrow}>
+              <Ionicons name="chevron-forward" size={16} color="#FFFFFF" />
+            </View>
+          </LinearGradient>
+        </TouchableOpacity>
+
+        {/* Edit name modal */}
+        <Modal visible={editing} animationType="slide" transparent>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>{t('settings.editName') || 'Edit name'}</Text>
+              <TextInput
+                style={styles.modalInput}
+                value={editName}
+                onChangeText={setEditName}
+                placeholder={t('settings.namePlaceholder') || 'Your name'}
+                maxLength={40}
+                autoFocus
+              />
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={[styles.modalBtn, styles.modalCancel]}
+                  onPress={() => setEditing(false)}
+                >
+                  <Text style={styles.modalBtnText}>{t('common.cancel') || 'Cancel'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalBtn, styles.modalSave]}
+                  onPress={async () => {
+                    const next = (editName || '').trim() || 'Guest';
+                    setProfileName(next);
+                    await AsyncStorage.setItem(PROFILE_NAME_KEY, next);
+                    setEditing(false);
+                  }}
+                >
+                  <Text style={[styles.modalBtnText, { color: '#FFFFFF' }]}>{t('common.save') || 'Save'}</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
+        </Modal>
 
-          <TouchableOpacity style={styles.profileArrow} activeOpacity={0.7}>
-            <Ionicons name="chevron-forward" size={16} color="#FFFFFF" />
-          </TouchableOpacity>
-        </LinearGradient>
+        {/* ── Language selector ── */}
+        <Text style={[styles.sectionLabel, isRTL && { textAlign: 'right' }]}>
+          {t('settings.appLanguage')}
+        </Text>
+        <View style={styles.card}>
+          {[
+            { code: 'ar', flag: '🇲🇦', label: 'العربية' },
+            { code: 'fr', flag: '🇫🇷', label: 'Français' },
+            { code: 'en', flag: '🇺🇸', label: 'English' },
+          ].map((lang, idx, arr) => (
+            <React.Fragment key={lang.code}>
+              <TouchableOpacity
+                style={[styles.row, isRTL && { flexDirection: 'row-reverse' }]}
+                onPress={() => setLanguage(lang.code)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.iconBox, { backgroundColor: language === lang.code ? '#6366F1' : '#F0F0F8' }]}>
+                  <Text style={styles.flagEmoji}>{lang.flag}</Text>
+                </View>
+                <View style={styles.rowCenter}>
+                  <Text style={[styles.rowTitle, isRTL && { textAlign: 'right' }]}>{lang.label}</Text>
+                </View>
+                {language === lang.code && (
+                  <Ionicons name="checkmark-circle" size={20} color="#6366F1" />
+                )}
+              </TouchableOpacity>
+              {idx < arr.length - 1 && <View style={styles.divider} />}
+            </React.Fragment>
+          ))}
+        </View>
 
         {/* ════════════════ NOTIFICATIONS ════════════════ */}
-        <Text style={styles.sectionLabel}>NOTIFICATIONS</Text>
+        <Text style={[styles.sectionLabel, isRTL && { textAlign: 'right' }]}>
+          {t('settings.notifications')}
+        </Text>
         <View style={styles.card}>
 
           {/* Daily reminders */}
-          <View style={styles.row}>
+          <View style={[styles.row, isRTL && { flexDirection: 'row-reverse' }]}>
             <View style={[styles.iconBox, { backgroundColor: '#FF9500' }]}>
               <Ionicons name="notifications-outline" size={18} color="#FFFFFF" />
             </View>
             <View style={styles.rowCenter}>
-              <Text style={styles.rowTitle}>Daily reminders</Text>
-              <Text style={styles.rowSub}>Practice nudges & streak alerts</Text>
+              <Text style={[styles.rowTitle, isRTL && { textAlign: 'right' }]}>
+                {t('settings.dailyReminders')}
+              </Text>
+              <Text style={[styles.rowSub, isRTL && { textAlign: 'right' }]}>
+                {t('settings.remindersSub')}
+              </Text>
             </View>
             {applying ? (
               <ActivityIndicator size="small" color="#7B61FF" />
@@ -205,13 +307,17 @@ export default function SettingsScreen() {
 
           {/* Frequency */}
           <View style={styles.freqBlock}>
-            <View style={styles.freqTopRow}>
+            <View style={[styles.freqTopRow, isRTL && { flexDirection: 'row-reverse' }]}>
               <View style={[styles.iconBox, { backgroundColor: '#FF6B9D' }]}>
                 <Ionicons name="time-outline" size={18} color="#FFFFFF" />
               </View>
               <View style={styles.rowCenter}>
-                <Text style={styles.rowTitle}>Frequency</Text>
-                <Text style={styles.rowSub}>How often you get nudged</Text>
+                <Text style={[styles.rowTitle, isRTL && { textAlign: 'right' }]}>
+                  {t('settings.frequency')}
+                </Text>
+                <Text style={[styles.rowSub, isRTL && { textAlign: 'right' }]}>
+                  {t('settings.frequencySub')}
+                </Text>
               </View>
             </View>
 
@@ -254,16 +360,24 @@ export default function SettingsScreen() {
         )}
 
         {/* ════════════════ LEARNING ════════════════ */}
-        <Text style={styles.sectionLabel}>LEARNING</Text>
+        <Text style={[styles.sectionLabel, isRTL && { textAlign: 'right' }]}>
+          {t('settings.learning')}
+        </Text>
         <View style={styles.card}>
 
           {/* Daily goal */}
-          <TouchableOpacity style={styles.row} onPress={showGoalPicker} activeOpacity={0.7}>
+          <TouchableOpacity
+            style={[styles.row, isRTL && { flexDirection: 'row-reverse' }]}
+            onPress={showGoalPicker}
+            activeOpacity={0.7}
+          >
             <View style={[styles.iconBox, { backgroundColor: '#4A8FE8' }]}>
               <Ionicons name="trophy-outline" size={18} color="#FFFFFF" />
             </View>
             <View style={styles.rowCenter}>
-              <Text style={styles.rowTitle}>Daily goal</Text>
+              <Text style={[styles.rowTitle, isRTL && { textAlign: 'right' }]}>
+                {t('settings.dailyGoal')}
+              </Text>
             </View>
             <Text style={styles.rowValue}>{settings.dailyGoal} words</Text>
             <Ionicons name="chevron-forward" size={16} color="#C0C0CC" />
@@ -272,12 +386,18 @@ export default function SettingsScreen() {
           <View style={styles.divider} />
 
           {/* Quiz length */}
-          <TouchableOpacity style={styles.row} onPress={showQuizLengthPicker} activeOpacity={0.7}>
+          <TouchableOpacity
+            style={[styles.row, isRTL && { flexDirection: 'row-reverse' }]}
+            onPress={showQuizLengthPicker}
+            activeOpacity={0.7}
+          >
             <View style={[styles.iconBox, { backgroundColor: '#7B61FF' }]}>
               <Ionicons name="help-circle-outline" size={18} color="#FFFFFF" />
             </View>
             <View style={styles.rowCenter}>
-              <Text style={styles.rowTitle}>Quiz length</Text>
+              <Text style={[styles.rowTitle, isRTL && { textAlign: 'right' }]}>
+                {t('settings.quizLength')}
+              </Text>
             </View>
             <Text style={styles.rowValue}>{settings.quizLength} questions</Text>
             <Ionicons name="chevron-forward" size={16} color="#C0C0CC" />
@@ -286,13 +406,17 @@ export default function SettingsScreen() {
           <View style={styles.divider} />
 
           {/* Sound effects */}
-          <View style={styles.row}>
+          <View style={[styles.row, isRTL && { flexDirection: 'row-reverse' }]}>
             <View style={[styles.iconBox, { backgroundColor: '#4DBFA0' }]}>
               <Ionicons name="musical-notes-outline" size={18} color="#FFFFFF" />
             </View>
             <View style={styles.rowCenter}>
-              <Text style={styles.rowTitle}>Sound effects</Text>
-              <Text style={styles.rowSub}>{settings.soundEnabled ? 'On' : 'Off'}</Text>
+              <Text style={[styles.rowTitle, isRTL && { textAlign: 'right' }]}>
+                {t('settings.soundEffects')}
+              </Text>
+              <Text style={[styles.rowSub, isRTL && { textAlign: 'right' }]}>
+                {settings.soundEnabled ? t('common.on') : t('common.off')}
+              </Text>
             </View>
             <Switch
               value={settings.soundEnabled}
@@ -304,7 +428,7 @@ export default function SettingsScreen() {
         </View>
 
         {/* ── Version ── */}
-        <Text style={styles.version}>Lerne · v1.0</Text>
+        <Text style={styles.version}>{t('settings.version')}</Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -427,6 +551,11 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
 
+  /* Flag emoji */
+  flagEmoji: {
+    fontSize: 20,
+  },
+
   /* Row content */
   rowCenter: {
     flex: 1,
@@ -522,5 +651,55 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 32,
     marginBottom: 40,
+  },
+  /* Modal */
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCard: {
+    width: '90%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 18,
+    elevation: 6,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1A1A2E',
+    marginBottom: 12,
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderColor: '#F0F0F8',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 15,
+    marginBottom: 14,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  modalBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  modalCancel: {
+    backgroundColor: '#F0F0F8',
+  },
+  modalSave: {
+    backgroundColor: '#7B61FF',
+  },
+  modalBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1A1A2E',
   },
 });

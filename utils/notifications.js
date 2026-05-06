@@ -1,11 +1,28 @@
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { LANG_KEY } from './LanguageContext';
 
 const WORDS_KEY     = 'words';
 const SENTENCES_KEY = 'sentences';
 const SETTINGS_KEY  = 'notificationSettings';
 const INDEX_KEY     = 'notificationIndex'; // position in the combined cycle
+
+const NOTIF_SUBTITLE = {
+  en: 'Tap to quiz yourself',
+  ar: 'اضغط لاختبار نفسك',
+  fr: 'Appuyez pour tester vos connaissances',
+};
+const NOTIF_EMPTY_TITLE = {
+  en: 'Time to learn!',
+  ar: 'حان وقت التعلم!',
+  fr: "C'est l'heure d'apprendre !",
+};
+const NOTIF_EMPTY_BODY = {
+  en: 'Add words to start your German learning journey.',
+  ar: 'أضف كلمات لبدء رحلتك في تعلم الألمانية.',
+  fr: "Ajoutez des mots pour commencer votre apprentissage de l'allemand.",
+};
 
 // ⚠️  EXPO GO LIMITATION
 // Custom sounds are NOT supported in Expo Go. The notification will fire but
@@ -127,12 +144,27 @@ export async function getNextNotificationItem() {
 
 // ─── Content builder ──────────────────────────────────────────────────────────
 
-function contentFromItem(item) {
+/**
+ * Build notification content for a single item.
+ *
+ * ACTIVE-RECALL DESIGN: Only ONE side of the word is shown.
+ * The user must mentally recall the other side before tapping to quiz.
+ * Showing both sides at once (word = translation) has zero learning value.
+ *
+ * `displayMode` stored in `data` tells QuizScreen which direction to ask:
+ *   de_shown → user saw German  → quiz asks for Arabic  (de_to_ar)
+ *   ar_shown → user saw Arabic  → quiz asks for German  (ar_to_de)
+ */
+function contentFromItem(item, language = 'en') {
+  const prompt      = NOTIF_SUBTITLE[language] ?? NOTIF_SUBTITLE.en;
+  const showGerman  = Math.random() < 0.5;
+  const displayMode = showGerman ? 'de_shown' : 'ar_shown';
+
   if (item.type === 'word') {
     return {
-      title:    `🇩🇪 ${item.word}`,
-      body:     item.translation,
-      subtitle: 'Tap to test yourself',
+      // title = the ONE side to show; body = prompt only — never reveal the answer
+      title: showGerman ? item.word : item.translation,
+      body:  prompt,
       data: {
         type:        'word',
         id:          item.id,
@@ -140,15 +172,15 @@ function contentFromItem(item) {
         word:        item.word,
         translation: item.translation,
         article:     item.article,
+        displayMode,
       },
     };
   }
 
-  // sentence
+  // sentence — same rule: show only one side
   return {
-    title:    '🇩🇪 Sentence',
-    body:     item.translation,
-    subtitle: 'Tap to test yourself',
+    title: showGerman ? item.sentence : item.translation,
+    body:  prompt,
     data: {
       type:        'sentence',
       id:          item.id,
@@ -156,6 +188,7 @@ function contentFromItem(item) {
       sentence:    item.sentence,
       translation: item.translation,
       category:    item.category,
+      displayMode,
     },
   };
 }
@@ -184,17 +217,20 @@ export async function scheduleNotifications(frequencyId) {
 
   const freq = FREQUENCIES.find((f) => f.id === frequencyId) ?? FREQUENCIES[1];
 
-  const [list, rawIndex] = await Promise.all([
+  const [list, rawIndex, langRaw] = await Promise.all([
     buildItemList(),
     AsyncStorage.getItem(INDEX_KEY),
+    AsyncStorage.getItem(LANG_KEY),
   ]);
+
+  const language = langRaw || 'en';
 
   // ── Empty list fallback ────────────────────────────────────────────────────
   if (list.length === 0) {
     await Notifications.scheduleNotificationAsync({
       content: {
-        title: '🇩🇪 Time to learn!',
-        body:  'Add words to start your German learning journey.',
+        title: NOTIF_EMPTY_TITLE[language] ?? NOTIF_EMPTY_TITLE.en,
+        body:  NOTIF_EMPTY_BODY[language]  ?? NOTIF_EMPTY_BODY.en,
         sound: SOUND_FILE,
         data:  {},
       },
@@ -214,13 +250,12 @@ export async function scheduleNotifications(frequencyId) {
   await Promise.all(
     Array.from({ length: SCHEDULE_COUNT }, (_, i) => {
       const item    = list[(startIndex + i) % list.length];
-      const content = contentFromItem(item);
+      const content = contentFromItem(item, language);
 
       return Notifications.scheduleNotificationAsync({
         content: {
           title: content.title,
           body:  content.body,
-          ...(content.subtitle ? { subtitle: content.subtitle } : {}),
           sound: SOUND_FILE,
           data:  content.data,
         },
@@ -269,6 +304,22 @@ export async function applyNotificationSettings(settings) {
     await saveNotificationSettings({ ...settings, enabled: false });
     return 'denied';
   }
+
+  await scheduleNotifications(settings.frequency);
+  return 'scheduled';
+}
+
+/**
+ * Rebuild pending notifications only when reminders are enabled and already
+ * authorized. Useful after words/sentences are added or deleted so Android APK
+ * users do not stay stuck on the empty-list fallback notification.
+ */
+export async function refreshScheduledNotificationsIfEnabled() {
+  const settings = await loadNotificationSettings();
+  if (!settings.enabled) return 'disabled';
+
+  const status = await getPermissionStatus();
+  if (status !== 'granted') return 'denied';
 
   await scheduleNotifications(settings.frequency);
   return 'scheduled';

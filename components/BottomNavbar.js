@@ -3,6 +3,7 @@ import { View, TouchableOpacity, Text, StyleSheet, Platform } from 'react-native
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useLanguage } from '../utils/LanguageContext';
 
 const ACTIVE_COLOR = '#6C63FF';
 const INACTIVE_COLOR = '#9CA3AF';
@@ -12,7 +13,6 @@ const TABS = [
   { name: 'Words',     icon: 'book',       iconOutline: 'book-outline',       label: 'Words'   },
   { name: 'Quiz',      icon: 'star',       iconOutline: 'star-outline',       label: 'Quiz',   isCenter: true },
   { name: 'Sentences', icon: 'chatbubble', iconOutline: 'chatbubble-outline', label: 'Phrases' },
-  { name: 'Scan',      icon: 'scan',       iconOutline: 'scan-outline',       label: 'Scan'    },
   { name: 'Settings',  icon: 'settings',   iconOutline: 'settings-outline',   label: 'More'    },
 ];
 
@@ -33,6 +33,16 @@ function CenterButton({ onPress }) {
 
 export default function BottomNavbar({ state, navigation }) {
   const insets = useSafeAreaInsets();
+  const { t } = useLanguage();
+
+  // Tab label keys map screen name → nav translation key
+  const NAV_LABELS = {
+    Home:      t('nav.home'),
+    Words:     t('nav.words'),
+    Quiz:      '',
+    Sentences: t('nav.sentences'),
+    Settings:  t('nav.settings'),
+  };
 
   const makeOnPress = (route, focused) => () => {
     const event = navigation.emit({
@@ -46,8 +56,9 @@ export default function BottomNavbar({ state, navigation }) {
   };
 
   const quizIndex = TABS.findIndex(t => t.isCenter);
-  const quizRoute = state.routes[quizIndex];
-  const quizFocused = state.index === quizIndex;
+  const quizTab = TABS[quizIndex];
+  const quizRoute = state.routes.find(r => r.name === quizTab.name);
+  const quizFocused = state.routes[state.index].name === quizTab.name;
 
   return (
     <View style={[styles.container, { paddingBottom: Math.max(insets.bottom, 8) }]}>
@@ -57,9 +68,9 @@ export default function BottomNavbar({ state, navigation }) {
       </View>
 
       <View style={styles.navbar}>
-        {TABS.map((tab, index) => {
-          const route = state.routes[index];
-          const focused = state.index === index;
+        {TABS.map((tab) => {
+          const route = state.routes.find(r => r.name === tab.name);
+          const focused = state.routes[state.index].name === tab.name;
 
           if (tab.isCenter) {
             // Empty slot — keeps spacing even; button is in centerWrapper, no label.
@@ -79,7 +90,7 @@ export default function BottomNavbar({ state, navigation }) {
                 color={focused ? ACTIVE_COLOR : INACTIVE_COLOR}
               />
               <Text style={[styles.label, { color: focused ? ACTIVE_COLOR : INACTIVE_COLOR }]}>
-                {tab.label}
+                {NAV_LABELS[tab.name] ?? tab.label}
               </Text>
             </TouchableOpacity>
           );
@@ -137,22 +148,26 @@ const styles = StyleSheet.create({
     height: 72,
     alignItems: 'center',
     justifyContent: 'space-around',
-    paddingHorizontal: 4,
+    paddingHorizontal: 0,
   },
   tab: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
+    paddingVertical: 8,
+    gap: 2,
+    minHeight: 72,
+    marginRight: 8,
   },
   centerSlot: {
     flex: 1,
     alignItems: 'center',
-    justifyContent: 'flex-end',
-    paddingBottom: 8,
+    justifyContent: 'center',
   },
   label: {
     fontSize: 11,
     fontWeight: '600',
+    lineHeight: 13,
+    height: 13,
   },
 });

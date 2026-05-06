@@ -15,17 +15,18 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { CATEGORY_COLORS, FILTER_OPTIONS } from '../constants/categoryColors';
 import { GradientFAB } from '../components/ui';
 import { speakGerman, stopSpeech } from '../utils/speech';
+import { refreshScheduledNotificationsIfEnabled } from '../utils/notifications';
+import { useLanguage } from '../utils/LanguageContext';
 
 const STORAGE_KEY = 'sentences';
 
 export default function SentencesScreen() {
   const navigation = useNavigation();
+  const { t, isRTL } = useLanguage();
   const [sentences, setSentences] = useState([]);
   const [search, setSearch] = useState('');
-  const [activeFilter, setActiveFilter] = useState('All');
   const [loading, setLoading] = useState(true);
   const [playingId, setPlayingId] = useState(null);
 
@@ -62,20 +63,21 @@ export default function SentencesScreen() {
 
   const handleDelete = (item) => {
     Alert.alert(
-      'Delete sentence',
-      'Remove this sentence from your list?',
+      t('sentences.deleteTitle'),
+      t('sentences.deleteMsg'),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         {
-          text: 'Delete',
+          text: t('common.delete'),
           style: 'destructive',
           onPress: async () => {
             try {
               const updated = sentences.filter((s) => s.id !== item.id);
               await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
               setSentences(updated);
+              await refreshScheduledNotificationsIfEnabled();
             } catch {
-              Alert.alert('Error', 'Could not delete the sentence. Please try again.');
+              Alert.alert(t('common.error'), t('sentences.errorDelete'));
             }
           },
         },
@@ -84,14 +86,13 @@ export default function SentencesScreen() {
   };
 
   const filteredSentences = sentences.filter((s) => {
-    const matchesFilter = activeFilter === 'All' || s.category === activeFilter;
     const q = search.trim().toLowerCase();
-    return matchesFilter && (!q || s.sentence.toLowerCase().includes(q) || s.translation.toLowerCase().includes(q));
+    return !q || s.sentence.toLowerCase().includes(q) || s.translation.toLowerCase().includes(q);
   });
 
   const renderEmpty = () => {
     if (loading) return null;
-    const isSearching = search.trim() || activeFilter !== 'All';
+    const isSearching = search.trim();
     return (
       <View style={styles.emptyState}>
         <View style={styles.emptyIconWrap}>
@@ -102,32 +103,23 @@ export default function SentencesScreen() {
           />
         </View>
         <Text style={styles.emptyTitle}>
-          {isSearching ? 'No sentences found' : 'No sentences yet'}
+          {isSearching ? t('sentences.noSentencesFound') : t('sentences.noSentencesYet')}
         </Text>
         <Text style={styles.emptySubtitle}>
-          {isSearching
-            ? 'Try a different search or filter'
-            : 'Tap + to save your first sentence'}
+          {isSearching ? t('sentences.tryDifferent') : t('sentences.tapToSave')}
         </Text>
       </View>
     );
   };
 
+  const sentenceCount = sentences.length;
+
   const renderItem = ({ item }) => {
-    const colors = item.category ? CATEGORY_COLORS[item.category] : null;
     const isPlaying = playingId === item.id;
     return (
       <View style={styles.card}>
-        <View style={styles.cardTopRow}>
-          {colors ? (
-            <View style={[styles.categoryBadge, { backgroundColor: colors.bg }]}>
-              <Text style={[styles.categoryBadgeText, { color: colors.text }]}>
-                {item.category}
-              </Text>
-            </View>
-          ) : (
-            <View />
-          )}
+        <View style={[styles.cardTopRow, isRTL && { flexDirection: 'row-reverse' }]}>
+          <View />
           <TouchableOpacity
             onPress={() => handleDelete(item)}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -143,7 +135,7 @@ export default function SentencesScreen() {
 
         <Text style={styles.translationText}>{item.translation}</Text>
 
-        <View style={styles.cardActions}>
+        <View style={[styles.cardActions, isRTL && { flexDirection: 'row-reverse' }]}>
           <TouchableOpacity
             style={[styles.listenBtn, isPlaying && styles.listenBtnActive]}
             onPress={() => handleSpeak(item.id, item.sentence)}
@@ -155,7 +147,7 @@ export default function SentencesScreen() {
               color={isPlaying ? '#FFFFFF' : '#8B5CF6'}
             />
             <Text style={[styles.listenText, isPlaying && styles.listenTextActive]}>
-              {isPlaying ? 'Playing…' : 'Listen'}
+              {isPlaying ? t('sentences.playing') : t('sentences.listen')}
             </Text>
           </TouchableOpacity>
         </View>
@@ -175,25 +167,31 @@ export default function SentencesScreen() {
           end={{ x: 1, y: 1 }}
           style={styles.banner}
         >
-          <View style={styles.bannerLeft}>
-            <Text style={styles.bannerEyebrow}>PRACTICE PHRASES</Text>
-            <Text style={styles.bannerTitle}>Sentences</Text>
-            <Text style={styles.bannerSubtitle}>
-              {sentences.length > 0
-                ? `${sentences.length} sentence${sentences.length === 1 ? '' : 's'} saved`
-                : 'Learn German in context'}
-            </Text>
-          </View>
-          <View style={styles.bannerIconWrap}>
-            <Ionicons name="chatbubbles-outline" size={38} color="rgba(255,255,255,0.9)" />
+          <View style={[styles.bannerInnerRow, isRTL && { flexDirection: 'row-reverse' }]}>
+            <View style={styles.bannerLeft}>
+              <Text style={[styles.bannerEyebrow, isRTL && { textAlign: 'right' }]}>
+                {t('sentences.bannerEyebrow')}
+              </Text>
+              <Text style={[styles.bannerTitle, isRTL && { textAlign: 'right' }]}>
+                {t('sentences.title')}
+              </Text>
+              <Text style={[styles.bannerSubtitle, isRTL && { textAlign: 'right' }]}>
+                {sentenceCount > 0
+                  ? t('sentences.sentencesSaved', { n: sentenceCount, s: sentenceCount === 1 ? '' : 's' })
+                  : t('sentences.learnInContext')}
+              </Text>
+            </View>
+            <View style={styles.bannerIconWrap}>
+              <Ionicons name="chatbubbles-outline" size={38} color="rgba(255,255,255,0.9)" />
+            </View>
           </View>
         </LinearGradient>
 
-        <View style={styles.searchWrapper}>
+        <View style={[styles.searchWrapper, isRTL && { flexDirection: 'row-reverse' }]}>
           <Ionicons name="search-outline" size={18} color="#9CA3AF" />
           <TextInput
-            style={styles.searchInput}
-            placeholder="Search sentences or translations…"
+            style={[styles.searchInput, isRTL && { textAlign: 'right' }]}
+            placeholder={t('sentences.searchHint')}
             placeholderTextColor="#9CA3AF"
             value={search}
             onChangeText={handleSearch}
@@ -208,33 +206,6 @@ export default function SentencesScreen() {
               <Ionicons name="close-circle" size={18} color="#D1D5DB" />
             </TouchableOpacity>
           )}
-        </View>
-
-        <View style={styles.filterRow}>
-          {FILTER_OPTIONS.map((opt) => {
-            const isActive = opt === activeFilter;
-            const colors = opt !== 'All' ? CATEGORY_COLORS[opt] : null;
-            return (
-              <TouchableOpacity
-                key={opt}
-                style={[
-                  styles.filterChip,
-                  isActive && (colors ? { backgroundColor: colors.bg } : styles.filterChipActiveAll),
-                ]}
-                onPress={() => setActiveFilter(opt)}
-                activeOpacity={0.7}
-              >
-                <Text
-                  style={[
-                    styles.filterChipText,
-                    isActive && (colors ? { color: colors.text } : styles.filterChipTextAll),
-                  ]}
-                >
-                  {opt}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
         </View>
       </View>
 
@@ -287,6 +258,8 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     padding: 20,
     marginBottom: 16,
+  },
+  bannerInnerRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -350,23 +323,6 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     flexWrap: 'wrap',
   },
-  filterChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 20,
-    backgroundColor: '#F3F4F6',
-  },
-  filterChipActiveAll: {
-    backgroundColor: '#EEF2FF',
-  },
-  filterChipText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#9CA3AF',
-  },
-  filterChipTextAll: {
-    color: '#4F46E5',
-  },
 
   /* Sentence card */
   card: {
@@ -385,16 +341,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 12,
-  },
-  categoryBadge: {
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  categoryBadgeText: {
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.3,
   },
   germanText: {
     fontSize: 17,

@@ -18,6 +18,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ARTICLE_COLORS, FILTER_OPTIONS } from '../constants/articleColors';
 import { GradientFAB } from '../components/ui';
 import { speakGerman, stopSpeech } from '../utils/speech';
+import { refreshScheduledNotificationsIfEnabled } from '../utils/notifications';
+import { useLanguage } from '../utils/LanguageContext';
 
 const STORAGE_KEY = 'words';
 
@@ -34,6 +36,7 @@ function getWordIcon(article) {
 
 export default function WordsScreen() {
   const navigation = useNavigation();
+  const { t, isRTL } = useLanguage();
   const [words, setWords] = useState([]);
   const [search, setSearch] = useState('');
   const [activeFilter, setActiveFilter] = useState('All');
@@ -60,20 +63,21 @@ export default function WordsScreen() {
 
   const handleDelete = (item) => {
     Alert.alert(
-      'Delete word',
-      `Remove "${item.word}" from your list?`,
+      t('words.deleteTitle'),
+      t('words.deleteMsg', { word: item.word }),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         {
-          text: 'Delete',
+          text: t('common.delete'),
           style: 'destructive',
           onPress: async () => {
             try {
               const updated = words.filter((w) => w.id !== item.id);
               await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
               setWords(updated);
+              await refreshScheduledNotificationsIfEnabled();
             } catch {
-              Alert.alert('Error', 'Could not delete the word. Please try again.');
+              Alert.alert(t('common.error'), t('words.errorDelete'));
             }
           },
         },
@@ -113,12 +117,10 @@ export default function WordsScreen() {
           />
         </View>
         <Text style={styles.emptyTitle}>
-          {isSearching ? 'No words found' : 'No words yet'}
+          {isSearching ? t('words.noWordsFound') : t('words.noWordsYet')}
         </Text>
         <Text style={styles.emptySubtitle}>
-          {isSearching
-            ? 'Try a different search or filter'
-            : 'Tap + to add your first word'}
+          {isSearching ? t('words.tryDifferent') : t('words.tapToAdd')}
         </Text>
       </View>
     );
@@ -128,22 +130,22 @@ export default function WordsScreen() {
     const colors    = ARTICLE_COLORS[item.article] || ARTICLE_COLORS.der;
     const isPlaying = playingId === item.id;
     return (
-      <View style={styles.wordCard}>
+      <View style={[styles.wordCard, isRTL && { flexDirection: 'row-reverse' }]}>
         <View style={[styles.wordIconCircle, { backgroundColor: colors.bg }]}>
           <Ionicons name={getWordIcon(item.article)} size={20} color={colors.text} />
         </View>
 
         <View style={styles.wordInfo}>
-          <View style={styles.wordNameRow}>
+          <View style={[styles.wordNameRow, isRTL && { flexDirection: 'row-reverse' }]}>
             <View style={[styles.articlePill, { backgroundColor: colors.bg }]}>
               <Text style={[styles.articlePillText, { color: colors.text }]}>{item.article}</Text>
             </View>
             <Text style={styles.wordText}>{item.word}</Text>
           </View>
-          <Text style={styles.translationText}>{item.translation}</Text>
+          <Text style={[styles.translationText, isRTL && { textAlign: 'right' }]}>{item.translation}</Text>
         </View>
 
-        <View style={styles.cardActions}>
+        <View style={[styles.cardActions, isRTL && { flexDirection: 'row-reverse' }]}>
           <TouchableOpacity
             style={[styles.listenIconBtn, isPlaying && styles.listenIconBtnActive]}
             onPress={() => handleSpeak(item.id, `${item.article} ${item.word}`)}
@@ -169,6 +171,8 @@ export default function WordsScreen() {
     );
   };
 
+  const wordCount = words.length;
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" translucent={false} backgroundColor="#F4F6FB" />
@@ -181,25 +185,31 @@ export default function WordsScreen() {
           end={{ x: 1, y: 1 }}
           style={styles.banner}
         >
-          <View style={styles.bannerLeft}>
-            <Text style={styles.bannerEyebrow}>YOUR VOCABULARY</Text>
-            <Text style={styles.bannerTitle}>Words</Text>
-            <Text style={styles.bannerSubtitle}>
-              {words.length > 0
-                ? `${words.length} word${words.length === 1 ? '' : 's'} saved`
-                : 'Build your vocabulary'}
-            </Text>
-          </View>
-          <View style={styles.bannerIconWrap}>
-            <Ionicons name="library-outline" size={38} color="rgba(255,255,255,0.9)" />
+          <View style={[styles.bannerInnerRow, isRTL && { flexDirection: 'row-reverse' }]}>
+            <View style={styles.bannerLeft}>
+              <Text style={[styles.bannerEyebrow, isRTL && { textAlign: 'right' }]}>
+                {t('words.bannerEyebrow')}
+              </Text>
+              <Text style={[styles.bannerTitle, isRTL && { textAlign: 'right' }]}>
+                {t('words.title')}
+              </Text>
+              <Text style={[styles.bannerSubtitle, isRTL && { textAlign: 'right' }]}>
+                {wordCount > 0
+                  ? t('words.wordsSaved', { n: wordCount, s: wordCount === 1 ? '' : 's' })
+                  : t('words.buildVocab')}
+              </Text>
+            </View>
+            <View style={styles.bannerIconWrap}>
+              <Ionicons name="library-outline" size={38} color="rgba(255,255,255,0.9)" />
+            </View>
           </View>
         </LinearGradient>
 
-        <View style={styles.searchWrapper}>
+        <View style={[styles.searchWrapper, isRTL && { flexDirection: 'row-reverse' }]}>
           <Ionicons name="search-outline" size={18} color="#9CA3AF" />
           <TextInput
-            style={styles.searchInput}
-            placeholder="Search words or translations…"
+            style={[styles.searchInput, isRTL && { textAlign: 'right' }]}
+            placeholder={t('words.searchHint')}
             placeholderTextColor="#9CA3AF"
             value={search}
             onChangeText={handleSearch}
@@ -217,10 +227,11 @@ export default function WordsScreen() {
           )}
         </View>
 
-        <View style={styles.filterRow}>
+        <View style={[styles.filterRow, isRTL && { flexDirection: 'row-reverse' }]}>
           {FILTER_OPTIONS.map((opt) => {
             const isActive = opt === activeFilter;
             const colors = opt !== 'All' ? ARTICLE_COLORS[opt] : null;
+            const chipLabel = opt === 'All' ? t('common.all') : opt;
             return (
               <TouchableOpacity
                 key={opt}
@@ -237,7 +248,7 @@ export default function WordsScreen() {
                     isActive && (colors ? { color: colors.text } : styles.filterChipTextAll),
                   ]}
                 >
-                  {opt}
+                  {chipLabel}
                 </Text>
               </TouchableOpacity>
             );
@@ -294,6 +305,8 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     padding: 20,
     marginBottom: 16,
+  },
+  bannerInnerRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',

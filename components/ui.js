@@ -2,6 +2,7 @@ import React from 'react';
 import { TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Full-width gradient save/action button used in modals
 export function GradientButton({ onPress, disabled, label, loadingLabel = 'Saving…' }) {
@@ -21,8 +22,14 @@ export function GradientButton({ onPress, disabled, label, loadingLabel = 'Savin
 
 // Circular gradient floating action button — positioned absolute bottom-right
 export function GradientFAB({ onPress }) {
+  const insets = useSafeAreaInsets();
+
   return (
-    <TouchableOpacity onPress={onPress} activeOpacity={0.85} style={s.fabWrap}>
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.85}
+      style={[s.fabWrap, { bottom: insets.bottom + 88 }]}
+    >
       <LinearGradient
         colors={['#A855F7', '#EC4899']}
         start={{ x: 0, y: 0 }}
@@ -50,7 +57,6 @@ const s = StyleSheet.create({
   },
   fabWrap: {
     position: 'absolute',
-    bottom: 28,
     right: 24,
     shadowColor: '#A855F7',
     shadowOffset: { width: 0, height: 6 },

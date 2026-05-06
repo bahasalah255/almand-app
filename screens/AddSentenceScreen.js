@@ -16,15 +16,10 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { refreshScheduledNotificationsIfEnabled } from '../utils/notifications';
+import { useLanguage } from '../utils/LanguageContext';
 
 const STORAGE_KEY = 'sentences';
-
-const CATEGORIES = [
-  { id: 'Daily',  label: 'Daily',  sublabel: 'routine', color: '#D97706' },
-  { id: 'Travel', label: 'Travel', sublabel: 'trips',   color: '#2563EB' },
-  { id: 'Work',   label: 'Work',   sublabel: 'office',  color: '#7C3AED' },
-  { id: 'School', label: 'School', sublabel: 'studies', color: '#059669' },
-];
 
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -42,29 +37,20 @@ function shakeAnim(value) {
 
 export default function AddSentenceScreen() {
   const navigation = useNavigation();
+  const { t, isRTL } = useLanguage();
 
-  const [category,    setCategory]    = useState(null);
   const [sentence,    setSentence]    = useState('');
   const [translation, setTranslation] = useState('');
   const [notes,       setNotes]       = useState('');
   const [focusedField,      setFocusedField]      = useState(null);
   const [sentenceError,     setSentenceError]     = useState(false);
   const [translationError,  setTranslationError]  = useState(false);
-  const [categoryError,     setCategoryError]     = useState(false);
   const [saving, setSaving] = useState(false);
 
   const sentenceShake    = useRef(new Animated.Value(0)).current;
   const translationShake = useRef(new Animated.Value(0)).current;
-  const categoryShake    = useRef(new Animated.Value(0)).current;
 
-  const selectedCategory = CATEGORIES.find(c => c.id === category);
-
-  const sentenceBorderColor = sentenceError
-    ? '#EF4444'
-    : focusedField === 'sentence' && selectedCategory
-    ? selectedCategory.color
-    : '#E8E8F0';
-
+  const sentenceBorderColor = sentenceError ? '#EF4444' : '#E8E8F0';
   const translationBorderColor = translationError ? '#EF4444' : '#E8E8F0';
 
   const handleSave = async () => {
@@ -72,11 +58,6 @@ export default function AddSentenceScreen() {
     const trimmedTranslation = translation.trim();
     let hasError = false;
 
-    if (!category) {
-      setCategoryError(true);
-      shakeAnim(categoryShake);
-      hasError = true;
-    }
     if (!trimmedSentence) {
       setSentenceError(true);
       shakeAnim(sentenceShake);
@@ -97,11 +78,11 @@ export default function AddSentenceScreen() {
         id:          generateId(),
         sentence:    trimmedSentence,
         translation: trimmedTranslation,
-        category,
         createdAt:   new Date().toISOString(),
         ...(notes.trim() ? { notes: notes.trim() } : {}),
       };
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify([newEntry, ...existing]));
+      await refreshScheduledNotificationsIfEnabled();
       navigation.goBack();
     } catch {
       setSaving(false);
@@ -116,7 +97,7 @@ export default function AddSentenceScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         {/* ── Header ── */}
-        <View style={styles.header}>
+        <View style={[styles.header, isRTL && { flexDirection: 'row-reverse' }]}>
           <TouchableOpacity
             style={styles.backBtn}
             onPress={() => navigation.goBack()}
@@ -124,7 +105,7 @@ export default function AddSentenceScreen() {
           >
             <Ionicons name="chevron-back" size={18} color="#1A1A2E" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>New sentence</Text>
+          <Text style={styles.headerTitle}>{t('addSentence.headerTitle')}</Text>
           <View style={styles.headerRight} />
         </View>
 
@@ -136,67 +117,25 @@ export default function AddSentenceScreen() {
         >
           {/* Title block */}
           <View style={styles.titleBlock}>
-            <Text style={styles.pageTitle}>Add a new sentence</Text>
-            <Text style={styles.pageSubtitle}>
-              Pick a category — it helps organize your phrases.
+            <Text style={[styles.pageTitle, isRTL && { textAlign: 'right' }]}>
+              {t('addSentence.pageTitle')}
+            </Text>
+            <Text style={[styles.pageSubtitle, isRTL && { textAlign: 'right' }]}>
+              {t('addSentence.pageSubtitle')}
             </Text>
           </View>
-
-          {/* ── Category selector ── */}
-          <Animated.View style={{ transform: [{ translateX: categoryShake }] }}>
-            <View style={styles.sectionLabelRow}>
-              <Text style={[styles.sectionLabel, categoryError && styles.labelError]}>
-                CATEGORY
-              </Text>
-              <Text style={styles.sectionHint}>tap to choose</Text>
-            </View>
-            <View style={[styles.categoryRow, categoryError && styles.categoryRowError]}>
-              {CATEGORIES.map((cat) => {
-                const isSelected = category === cat.id;
-                return (
-                  <TouchableOpacity
-                    key={cat.id}
-                    style={[
-                      styles.categoryCard,
-                      isSelected
-                        ? { backgroundColor: cat.color, borderWidth: 0 }
-                        : { backgroundColor: '#FFFFFF', borderWidth: 1.5, borderColor: '#E8E8F0' },
-                    ]}
-                    onPress={() => { setCategory(cat.id); setCategoryError(false); }}
-                    activeOpacity={0.8}
-                  >
-                    {isSelected && (
-                      <View style={styles.checkBadge}>
-                        <Ionicons name="checkmark" size={12} color="#FFFFFF" />
-                      </View>
-                    )}
-                    <Text style={[
-                      styles.categoryCardLabel,
-                      { color: isSelected ? '#FFFFFF' : cat.color },
-                    ]}>
-                      {cat.label}
-                    </Text>
-                    <Text style={[
-                      styles.categoryCardSublabel,
-                      { color: isSelected ? 'rgba(255,255,255,0.8)' : '#9090A0' },
-                    ]}>
-                      {cat.sublabel}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </Animated.View>
 
           {/* ── Input fields ── */}
           <View style={styles.fieldsBlock}>
             {/* German sentence */}
             <Animated.View style={{ transform: [{ translateX: sentenceShake }] }}>
-              <Text style={styles.fieldLabel}>GERMAN SENTENCE</Text>
+              <Text style={[styles.fieldLabel, isRTL && { textAlign: 'right' }]}>
+                {t('addSentence.sentenceLabel')}
+              </Text>
               <TextInput
-                style={[styles.input, styles.textArea, { borderColor: sentenceBorderColor }]}
+                style={[styles.input, styles.textArea, { borderColor: sentenceBorderColor }, isRTL && { textAlign: 'right' }]}
                 value={sentence}
-                onChangeText={(t) => { setSentence(t); setSentenceError(false); }}
+                onChangeText={(txt) => { setSentence(txt); setSentenceError(false); }}
                 onFocus={() => setFocusedField('sentence')}
                 onBlur={() => setFocusedField(null)}
                 autoCapitalize="sentences"
@@ -204,35 +143,39 @@ export default function AddSentenceScreen() {
                 multiline
                 numberOfLines={3}
                 textAlignVertical="top"
-                placeholder="e.g. Ich lerne jeden Tag Deutsch."
+                placeholder={t('addSentence.sentenceHint')}
                 placeholderTextColor="#C0C0D0"
               />
             </Animated.View>
 
             {/* Translation */}
             <Animated.View style={{ transform: [{ translateX: translationShake }] }}>
-              <Text style={styles.fieldLabel}>TRANSLATION</Text>
+              <Text style={[styles.fieldLabel, isRTL && { textAlign: 'right' }]}>
+                {t('addSentence.translationLabel')}
+              </Text>
               <TextInput
-                style={[styles.input, { borderColor: translationBorderColor }]}
+                style={[styles.input, { borderColor: translationBorderColor }, isRTL && { textAlign: 'right' }]}
                 value={translation}
-                onChangeText={(t) => { setTranslation(t); setTranslationError(false); }}
+                onChangeText={(txt) => { setTranslation(txt); setTranslationError(false); }}
                 onFocus={() => setFocusedField('translation')}
                 onBlur={() => setFocusedField(null)}
                 autoCapitalize="none"
                 returnKeyType="next"
-                placeholder="e.g. I learn German every day."
+                placeholder={t('addSentence.translationHint')}
                 placeholderTextColor="#C0C0D0"
               />
             </Animated.View>
 
             {/* Notes — optional */}
             <View>
-              <View style={styles.fieldLabelRow}>
-                <Text style={styles.fieldLabel}>NOTES</Text>
-                <Text style={styles.fieldLabelOptional}> · optional</Text>
+              <View style={[styles.fieldLabelRow, isRTL && { flexDirection: 'row-reverse' }]}>
+                <Text style={[styles.fieldLabel, isRTL && { textAlign: 'right' }]}>
+                  {t('addSentence.notesLabel')}
+                </Text>
+                <Text style={styles.fieldLabelOptional}> · {t('common.optional')}</Text>
               </View>
               <TextInput
-                style={[styles.input, styles.textArea, { borderColor: '#E8E8F0' }]}
+                style={[styles.input, styles.textArea, { borderColor: '#E8E8F0' }, isRTL && { textAlign: 'right' }]}
                 value={notes}
                 onChangeText={setNotes}
                 onFocus={() => setFocusedField('notes')}
@@ -241,7 +184,7 @@ export default function AddSentenceScreen() {
                 numberOfLines={3}
                 textAlignVertical="top"
                 autoCapitalize="sentences"
-                placeholder="Grammar tip or usage context..."
+                placeholder={t('addSentence.notesHint')}
                 placeholderTextColor="#C0C0D0"
               />
             </View>
@@ -263,7 +206,7 @@ export default function AddSentenceScreen() {
               style={styles.saveGradient}
             >
               <Text style={styles.saveLabel}>
-                {saving ? 'Saving…' : 'Save sentence'}
+                {saving ? t('addSentence.saving') : t('addSentence.saveSentence')}
               </Text>
             </LinearGradient>
           </TouchableOpacity>
@@ -348,51 +291,10 @@ const styles = StyleSheet.create({
     letterSpacing: 1.2,
     color: '#9090A0',
   },
-  labelError: {
-    color: '#EF4444',
-  },
   sectionHint: {
     fontSize: 11,
     color: '#9090A0',
     fontStyle: 'italic',
-  },
-  categoryRow: {
-    flexDirection: 'row',
-    gap: 8,
-    borderRadius: 16,
-    padding: 4,
-  },
-  categoryRowError: {
-    borderWidth: 2,
-    borderColor: '#EF4444',
-    padding: 4,
-  },
-  categoryCard: {
-    flex: 1,
-    height: 72,
-    borderRadius: 14,
-    paddingVertical: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checkBadge: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: 'rgba(255,255,255,0.35)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  categoryCardLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  categoryCardSublabel: {
-    fontSize: 11,
-    marginTop: 2,
   },
 
   /* Input fields */

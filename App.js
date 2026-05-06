@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, CommonActions } from '@react-navigation/native';
+import { LanguageProvider } from './utils/LanguageContext';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as Notifications from 'expo-notifications';
@@ -83,20 +84,31 @@ export default function App() {
 
   const handleNavigationReady = async () => {
     const response = await Notifications.getLastNotificationResponseAsync();
-    if (response) {
-      const data = response.notification.request.content.data;
-      handleNotificationData(data, navigationRef);
-    }
+    if (!response) return;
+    const data = response.notification.request.content.data;
+    if (!data?.type) return;
+
+    // On cold start the navigator is at 'Splash' — Main hasn't rendered yet
+    // so a plain navigate('Quiz') would be silently dropped.
+    // Reset the stack to 'Main' first, then navigate into the Quiz tab.
+    navigationRef.current?.dispatch(
+      CommonActions.reset({ index: 0, routes: [{ name: 'Main' }] })
+    );
+    setTimeout(() => {
+      navigationRef.current?.navigate('Quiz', { focusItem: data });
+    }, 100);
   };
 
   return (
-    <NavigationContainer ref={navigationRef} onReady={handleNavigationReady}>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="Splash"      component={SplashScreen} />
-        <Stack.Screen name="Main"        component={MainTabs} />
-        <Stack.Screen name="AddWord"     component={AddWordScreen} />
-        <Stack.Screen name="AddSentence" component={AddSentenceScreen} />
-      </Stack.Navigator>
-    </NavigationContainer>
+    <LanguageProvider>
+      <NavigationContainer ref={navigationRef} onReady={handleNavigationReady}>
+        <Stack.Navigator screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="Splash"      component={SplashScreen} />
+          <Stack.Screen name="Main"        component={MainTabs} />
+          <Stack.Screen name="AddWord"     component={AddWordScreen} />
+          <Stack.Screen name="AddSentence" component={AddSentenceScreen} />
+        </Stack.Navigator>
+      </NavigationContainer>
+    </LanguageProvider>
   );
 }
