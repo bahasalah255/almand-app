@@ -10,6 +10,7 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -24,6 +25,17 @@ import { useLanguage } from '../utils/LanguageContext';
 const WORDS_KEY      = 'words';
 const QUIZ_LENGTH    = 5;
 const XP_PER_CORRECT = 10;
+const MIN_WORDS      = 3;
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const CARD_WIDTH = (SCREEN_WIDTH - 40 - 12) / 2;
+
+const ARTICLE_PILL = {
+  der:    { color: '#4A8FE8', bg: '#EBF4FF' },
+  die:    { color: '#E8706A', bg: '#FFF0EF' },
+  das:    { color: '#4DBFA0', bg: '#EDFAF6' },
+  plural: { color: '#F5C842', bg: '#FFF8E0' },
+};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -36,58 +48,15 @@ function shuffle(arr) {
   return a;
 }
 
-/**
- * Build a standard random quiz from a words array.
- * Each question gets a random direction (de→ar or ar→de).
- */
 function buildQuestions(words) {
-  const pool = shuffle(words).slice(0, Math.min(QUIZ_LENGTH, words.length));
-  return pool.map((word, i) => {
-    const mode = Math.random() < 0.5 ? 'de_to_ar' : 'ar_to_de';
-    return {
-      key:        word.id + '_' + i,
-      mode,
-      prompt:     mode === 'de_to_ar' ? word.word        : word.translation,
-      answer:     mode === 'de_to_ar' ? word.translation : word.word,
-      germanWord: word.article ? `${word.article} ${word.word}` : word.word,
-      isSentence: false,
-    };
-  });
-}
-
-/**
- * Build a single focused question from a notification focusItem.
- *
- * displayMode encodes what the notification SHOWED:
- *   'de_shown' → user saw German  → quiz asks for Arabic  (de_to_ar)
- *   'ar_shown' → user saw Arabic  → quiz asks for German  (ar_to_de)
- *   (no mode)  → default de_to_ar
- */
-function buildFocusedQuestion(focusItem) {
-  const mode = focusItem.displayMode === 'ar_shown' ? 'ar_to_de' : 'de_to_ar';
-
-  if (focusItem.type === 'word') {
-    return {
-      key:        String(focusItem.id) + '_focus',
-      mode,
-      prompt:     mode === 'de_to_ar' ? focusItem.word        : focusItem.translation,
-      answer:     mode === 'de_to_ar' ? focusItem.translation : focusItem.word,
-      germanWord: focusItem.article ? `${focusItem.article} ${focusItem.word}` : focusItem.word,
-      isSentence: false,
-    };
-  }
-
-  // sentence
-  const german = focusItem.sentence    || '';
-  const arabic = focusItem.translation || '';
-  return {
-    key:        String(focusItem.sentenceId || focusItem.id) + '_focus',
-    mode,
-    prompt:     mode === 'de_to_ar' ? german : arabic,
-    answer:     mode === 'de_to_ar' ? arabic : german,
-    germanWord: german,
-    isSentence: true,
-  };
+  return shuffle(words)
+    .slice(0, Math.min(QUIZ_LENGTH, words.length))
+    .map((w, i) => ({
+      key:         w.id + '_' + i,
+      german:      w.word,
+      translation: w.translation,
+      article:     w.article || null,
+    }));
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -95,185 +64,212 @@ function buildFocusedQuestion(focusItem) {
 export default function QuizScreen({ route, navigation }) {
   const { t, isRTL } = useLanguage();
 
-  const [words,      setWords]      = useState([]);
-  const [loading,    setLoading]    = useState(true);
-  const [phase,      setPhase]      = useState('quiz');   // 'quiz' | 'done'
-  const [questions,  setQuestions]  = useState([]);
-  const [currentIdx, setCurrentIdx] = useState(0);
-  const [userInput,  setUserInput]  = useState('');
-  const [inputState, setInputState] = useState('idle');   // 'idle' | 'correct' | 'wrong'
-  const [retryMsg,   setRetryMsg]   = useState('');
-  const [score,      setScore]      = useState(0);
-  const [sessionXP,  setSessionXP]  = useState(0);
-  const [isPlaying,  setIsPlaying]  = useState(false);
+  // ── Core state ────────────────────────────────────────────────────────────
+  const [words,        setWords]        = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [phase,        setPhase]        = useState('mode_select'); // 'mode_select'|'quiz'|'done'
+  const [quizMode,     setQuizMode]     = useState(null);          // 'de_to_tr'|'tr_to_de'
+  const [questions,    setQuestions]    = useState([]);
+  const [currentIdx,   setCurrentIdx]   = useState(0);
+  const [inputValue,   setInputValue]   = useState('');
+  const [inputFocused, setInputFocused] = useState(false);
+  // 'idle' → user is typing
+  // 'correct' → answer accepted, show green + Next button
+  // 'wrong'   → wrong answer, show red feedback, then auto-reset so user retypes
+  const [answerState,  setAnswerState]  = useState('idle');
+  const [score,        setScore]        = useState(0);
+  const [correctCount, setCorrectCount] = useState(0);
+  const [wrongCount,   setWrongCount]   = useState(0);
+  const [streak,       setStreak]       = useState(0);
+  const [bestStreak,   setBestStreak]   = useState(0);
+  const [isPlaying,    setIsPlaying]    = useState(false);
 
-  const shakeAnim = useRef(new Animated.Value(0)).current;
-  const inputRef  = useRef(null);
-
-  // routeRef lets the stable useFocusEffect callback always see latest params
-  const routeRef = useRef(route);
-  routeRef.current = route;
-
-  // Prevents double-handling when useFocusEffect consumes a focusItem and the
-  // resulting setParams({ focusItem: null }) triggers useEffect again
+  // ── Refs ──────────────────────────────────────────────────────────────────
+  const shakeAnim            = useRef(new Animated.Value(0)).current;
+  const cardEnterAnim        = useRef(new Animated.Value(0)).current;
+  const inputRef             = useRef(null);
+  const routeRef             = useRef(route);
+  routeRef.current           = route;
   const focusItemConsumedRef = useRef(false);
+  const retryTimerRef        = useRef(null); // holds wrong-answer reset timer
 
-  // ── Build focused questions from a notification item ─────────────────────
+  // ── Card entrance animation ───────────────────────────────────────────────
+  const runCardEntrance = useCallback(() => {
+    cardEnterAnim.setValue(0);
+    Animated.timing(cardEnterAnim, {
+      toValue: 1, duration: 380, useNativeDriver: true,
+    }).start();
+  }, []);
 
-  const applyFocusedQuiz = (focusItem, loadedWords) => {
-    const focusQ    = buildFocusedQuestion(focusItem);
-    const otherIds  = new Set([focusItem.wordId, focusItem.id].filter(Boolean));
-    const fillWords = loadedWords.filter(w => !otherIds.has(w.id));
-    const fillQs    = buildQuestions(fillWords).slice(0, QUIZ_LENGTH - 1);
-    setQuestions([focusQ, ...fillQs]);
+  useEffect(() => {
+    if (phase === 'quiz' && questions.length > 0 && !loading) runCardEntrance();
+  }, [currentIdx, phase, loading]);
+
+  // ── Reset helpers ─────────────────────────────────────────────────────────
+  const resetGameState = () => {
+    if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    setCurrentIdx(0);
+    setInputValue('');
+    setAnswerState('idle');
+    setScore(0);
+    setCorrectCount(0);
+    setWrongCount(0);
+    setStreak(0);
+    setBestStreak(0);
   };
 
-  // ── Load & start quiz on screen focus ────────────────────────────────────
+  // ── Load words on focus + notification handling ───────────────────────────
+  const applyFocusedQuiz = (focusItem, loadedWords) => {
+    const focused = {
+      key:         String(focusItem.id) + '_focus',
+      german:      focusItem.word      || focusItem.sentence    || '',
+      translation: focusItem.translation || '',
+      article:     focusItem.article   || null,
+    };
+    const others = loadedWords.filter(w => w.id !== (focusItem.wordId || focusItem.id));
+    const fillQs = shuffle(others)
+      .slice(0, Math.min(QUIZ_LENGTH - 1, others.length))
+      .map((w, i) => ({ key: w.id + '_' + i, german: w.word, translation: w.translation, article: w.article || null }));
+    setQuestions([focused, ...fillQs]);
+  };
 
   useFocusEffect(
     useCallback(() => {
+      setLoading(true);
       stopSpeech();
       setIsPlaying(false);
-      setLoading(true);
-
       const focusItem = routeRef.current?.params?.focusItem;
 
       AsyncStorage.getItem(WORDS_KEY)
         .then((raw) => {
           const loaded = raw ? JSON.parse(raw) : [];
           setWords(loaded);
+          resetGameState();
 
           if (focusItem?.type) {
-            // Screen gained focus WITH a notification focusItem already in params
             focusItemConsumedRef.current = true;
+            const mode = focusItem.displayMode === 'ar_shown' ? 'tr_to_de' : 'de_to_tr';
+            setQuizMode(mode);
             applyFocusedQuiz(focusItem, loaded);
+            setPhase('quiz');
             navigation?.setParams({ focusItem: null });
-          } else if (loaded.length > 0) {
-            setQuestions(buildQuestions(loaded));
           } else {
+            setPhase('mode_select');
+            setQuizMode(null);
             setQuestions([]);
           }
-
-          setCurrentIdx(0);
-          setUserInput('');
-          setInputState('idle');
-          setRetryMsg('');
-          setScore(0);
-          setSessionXP(0);
-          setPhase('quiz');
         })
         .catch(() => setWords([]))
         .finally(() => setLoading(false));
     }, [])
   );
 
-  // ── Handle notification tap while quiz screen is already focused ──────────
-
   useEffect(() => {
     const focusItem = route?.params?.focusItem;
     if (!focusItem?.type) return;
-
-    // Guard: focusItem was already consumed by useFocusEffect above
-    if (focusItemConsumedRef.current) {
-      focusItemConsumedRef.current = false;
-      return;
-    }
-
+    if (focusItemConsumedRef.current) { focusItemConsumedRef.current = false; return; }
     stopSpeech();
     setIsPlaying(false);
-    setLoading(true);
-
     AsyncStorage.getItem(WORDS_KEY)
       .then((raw) => {
         const loaded = raw ? JSON.parse(raw) : [];
         setWords(loaded);
+        const mode = focusItem.displayMode === 'ar_shown' ? 'tr_to_de' : 'de_to_tr';
+        setQuizMode(mode);
         applyFocusedQuiz(focusItem, loaded);
-        setCurrentIdx(0);
-        setUserInput('');
-        setInputState('idle');
-        setRetryMsg('');
-        setScore(0);
-        setSessionXP(0);
+        resetGameState();
         setPhase('quiz');
         navigation?.setParams({ focusItem: null });
       })
-      .catch(() => setWords([]))
-      .finally(() => setLoading(false));
+      .catch(() => {});
   }, [route?.params?.focusItem]);
 
-  // ── Shake animation ──────────────────────────────────────────────────────
-
+  // ── Shake animation ───────────────────────────────────────────────────────
   const triggerShake = () => {
     shakeAnim.setValue(0);
     Animated.sequence([
-      Animated.timing(shakeAnim, { toValue: 12,  duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -12, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 8,   duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: -8,  duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeAnim, { toValue: 0,   duration: 50, useNativeDriver: true }),
+      Animated.timing(shakeAnim, { toValue: -10, duration: 70, useNativeDriver: true }),
+      Animated.timing(shakeAnim, { toValue:  10, duration: 70, useNativeDriver: true }),
+      Animated.timing(shakeAnim, { toValue: -10, duration: 70, useNativeDriver: true }),
+      Animated.timing(shakeAnim, { toValue:  10, duration: 70, useNativeDriver: true }),
+      Animated.timing(shakeAnim, { toValue:   0, duration: 50, useNativeDriver: true }),
     ]).start();
   };
 
-  // ── Handlers ──────────────────────────────────────────────────────────────
-
-  const handleInputChange = (text) => {
-    setUserInput(text);
-    if (inputState === 'wrong') {
-      setInputState('idle');
-      setRetryMsg('');
-    }
+  // ── Start quiz ────────────────────────────────────────────────────────────
+  const startQuiz = (mode) => {
+    setQuizMode(mode);
+    setQuestions(buildQuestions(words));
+    setPhase('quiz');
+    setTimeout(() => inputRef.current?.focus(), 400);
   };
 
+  // ── Submit answer ─────────────────────────────────────────────────────────
   const handleSubmit = async () => {
-    if (!userInput.trim() || inputState === 'correct') return;
-    const q       = questions[currentIdx];
-    const correct = userInput.toLowerCase().trim() === q.answer.toLowerCase().trim();
+    if (!inputValue.trim() || answerState !== 'idle') return;
+
+    const q             = questions[currentIdx];
+    const userAnswer    = inputValue.trim().toLowerCase();
+    const correctAnswer = quizMode === 'de_to_tr'
+      ? q.translation.trim().toLowerCase()
+      : q.german.trim().toLowerCase();
+
+    const correct =
+      userAnswer === correctAnswer ||
+      correctAnswer.includes(userAnswer) ||
+      userAnswer.includes(correctAnswer);
+
     if (correct) {
-      setInputState('correct');
-      setScore((prev) => prev + 1);
-      setSessionXP((prev) => prev + XP_PER_CORRECT);
+      // ✅ Correct — show green state, user taps Next to continue
+      setAnswerState('correct');
+      const newStreak = streak + 1;
+      setStreak(newStreak);
+      setBestStreak(prev => Math.max(prev, newStreak));
+      setScore(prev => prev + XP_PER_CORRECT);
+      setCorrectCount(prev => prev + 1);
       await addXP(XP_PER_CORRECT);
     } else {
-      setInputState('wrong');
-      const retryMessages = t('quiz.retryMessages');
-      setRetryMsg(retryMessages[Math.floor(Math.random() * retryMessages.length)]);
+      // ❌ Wrong — shake, show red state, then auto-reset so user can retype
+      setAnswerState('wrong');
+      setWrongCount(prev => prev + 1);
+      setStreak(0);
       triggerShake();
+
+      // Clear and let user try again after a short pause
+      retryTimerRef.current = setTimeout(() => {
+        setAnswerState('idle');
+        setInputValue('');
+        setTimeout(() => inputRef.current?.focus(), 50);
+      }, 1400);
     }
   };
 
+  // ── Advance to next question (only after correct) ─────────────────────────
   const handleNext = () => {
     stopSpeech();
     setIsPlaying(false);
+    setAnswerState('idle');
+    setInputValue('');
+
     if (currentIdx + 1 >= questions.length) {
       setPhase('done');
     } else {
-      setCurrentIdx((prev) => prev + 1);
-      setUserInput('');
-      setInputState('idle');
-      setRetryMsg('');
-      setTimeout(() => inputRef.current?.focus(), 120);
+      setCurrentIdx(prev => prev + 1);
+      setTimeout(() => inputRef.current?.focus(), 150);
     }
   };
 
-  const handleRestart = () => {
-    stopSpeech();
-    setIsPlaying(false);
-    setQuestions(buildQuestions(words));
-    setCurrentIdx(0);
-    setUserInput('');
-    setInputState('idle');
-    setRetryMsg('');
-    setScore(0);
-    setSessionXP(0);
-    setPhase('quiz');
+  // ── Play again ────────────────────────────────────────────────────────────
+  const handlePlayAgain = () => {
+    resetGameState();
+    setPhase('mode_select');
+    setQuizMode(null);
+    setQuestions([]);
   };
 
+  // ── TTS ───────────────────────────────────────────────────────────────────
   const handleListen = (germanWord) => {
-    if (isPlaying) {
-      stopSpeech();
-      setIsPlaying(false);
-      return;
-    }
+    if (isPlaying) { stopSpeech(); setIsPlaying(false); return; }
     setIsPlaying(true);
     speakGerman(germanWord, {
       onDone:  () => setIsPlaying(false),
@@ -281,260 +277,416 @@ export default function QuizScreen({ route, navigation }) {
     });
   };
 
-  // ── Loading ────────────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // LOADING
+  // ═══════════════════════════════════════════════════════════════════════════
 
   if (loading) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
         <StatusBar style="dark" translucent={false} backgroundColor="#F4F6FB" />
         <View style={styles.centered}>
-          <ActivityIndicator size="large" color="#6366F1" />
+          <ActivityIndicator size="large" color="#7B61FF" />
         </View>
       </SafeAreaView>
     );
   }
 
-  // ── Empty state ────────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MODE SELECTOR
+  // ═══════════════════════════════════════════════════════════════════════════
 
-  if (words.length === 0) {
+  if (phase === 'mode_select') {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
         <StatusBar style="dark" translucent={false} backgroundColor="#F4F6FB" />
         <ScrollView contentContainerStyle={styles.inner} showsVerticalScrollIndicator={false}>
-          <Text style={styles.title}>{t('quiz.title')}</Text>
-          <View style={styles.emptyCard}>
-            <View style={styles.emptyIconWrap}>
-              <Ionicons name="library-outline" size={40} color="#9CA3AF" />
-            </View>
-            <Text style={styles.emptyTitle}>{t('quiz.noWords')}</Text>
-            <Text style={styles.emptyBody}>{t('quiz.addWordsFirst')}</Text>
-          </View>
-        </ScrollView>
-      </SafeAreaView>
-    );
-  }
-
-  // ── Done screen ────────────────────────────────────────────────────────────
-
-  if (phase === 'done') {
-    const perfect  = score === questions.length;
-    const iconName = perfect ? 'trophy' : score > 0 ? 'star' : 'reload-circle';
-
-    return (
-      <SafeAreaView style={styles.container} edges={['top']}>
-        <StatusBar style="dark" translucent={false} backgroundColor="#F4F6FB" />
-        <ScrollView contentContainerStyle={styles.inner} showsVerticalScrollIndicator={false}>
-          <View style={[styles.headerRow, isRTL && { flexDirection: 'row-reverse' }]}>
-            <View>
-              <Text style={styles.title}>{t('quiz.title')}</Text>
-              <Text style={styles.subtitle}>{t('quiz.sessionComplete')}</Text>
-            </View>
-          </View>
 
           <LinearGradient
-            colors={['#6366F1', '#8B5CF6', '#EC4899']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.resultCard}
+            colors={['#7B61FF', '#9B6FE8', '#C850C0']}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+            style={styles.banner}
           >
-            <View style={styles.resultIconWrap}>
-              <Ionicons name={iconName} size={44} color="#FFFFFF" />
+            <View style={[styles.bannerRow, isRTL && { flexDirection: 'row-reverse' }]}>
+              <View style={styles.bannerLeft}>
+                <Text style={[styles.bannerEyebrow, isRTL && { textAlign: 'right' }]}>
+                  {t('quiz.subtitle').toUpperCase()}
+                </Text>
+                <Text style={[styles.bannerTitle, isRTL && { textAlign: 'right' }]}>
+                  {t('quiz.title')}
+                </Text>
+              </View>
+              <Ionicons name="star" size={40} color="rgba(255,255,255,0.85)" />
             </View>
-            <Text style={styles.resultTitle}>
-              {perfect ? t('quiz.perfect') : score > 0 ? t('quiz.wellDone') : t('quiz.keepPracticing')}
-            </Text>
-            <Text style={styles.resultScore}>
-              {score}
-              <Text style={styles.resultScoreOf}> / {questions.length}</Text>
-            </Text>
-            <Text style={styles.resultScoreLabel}>{t('quiz.correctAnswers')}</Text>
           </LinearGradient>
 
-          <View style={styles.xpCard}>
-            <View style={styles.xpRow}>
-              <View style={styles.xpIconWrap}>
-                <Ionicons name="star" size={22} color="#F59E0B" />
+          {words.length < MIN_WORDS ? (
+            <View style={styles.emptyCard}>
+              <View style={styles.emptyIconWrap}>
+                <Ionicons name="library-outline" size={36} color="#7B61FF" />
               </View>
-              <View>
-                <Text style={styles.xpEarned}>{t('quiz.xpEarned', { n: sessionXP })}</Text>
-                <Text style={styles.xpSub}>{t('quiz.addedToProgress')}</Text>
-              </View>
+              <Text style={[styles.emptyTitle, isRTL && { textAlign: 'right' }]}>
+                {t('quiz.noWords')}
+              </Text>
+              <Text style={[styles.emptyBody, isRTL && { textAlign: 'right' }]}>
+                {t('quiz.addWordsFirst')}
+              </Text>
             </View>
-          </View>
+          ) : (
+            <>
+              <Text style={[styles.modeHeading, isRTL && { textAlign: 'right' }]}>
+                Quiz mode
+              </Text>
 
-          <TouchableOpacity
-            style={styles.restartButton}
-            onPress={handleRestart}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="refresh" size={18} color="#FFFFFF" />
-            <Text style={styles.restartButtonText}>{t('quiz.restart')}</Text>
-          </TouchableOpacity>
+              <View style={[styles.modeGrid, isRTL && { flexDirection: 'row-reverse' }]}>
+                <TouchableOpacity style={styles.modeCardTouch} onPress={() => startQuiz('de_to_tr')} activeOpacity={0.88}>
+                  <LinearGradient colors={['#7B61FF', '#9B6FE8']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.modeCard}>
+                    <Text style={styles.modeCardFlag}>🇩🇪 → 🌍</Text>
+                    <Text style={styles.modeCardTitle}>German → Translation</Text>
+                    <Text style={styles.modeCardSub}>See German word, type the translation</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.modeCardTouch} onPress={() => startQuiz('tr_to_de')} activeOpacity={0.88}>
+                  <LinearGradient colors={['#4DBFA0', '#2E9E80']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.modeCard}>
+                    <Text style={styles.modeCardFlag}>🌍 → 🇩🇪</Text>
+                    <Text style={styles.modeCardTitle}>Translation → German</Text>
+                    <Text style={styles.modeCardSub}>See the translation, type the German word</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.wordCountPill}>
+                <Ionicons name="book-outline" size={14} color="#9090A0" />
+                <Text style={styles.wordCountText}>
+                  {words.length} word{words.length !== 1 ? 's' : ''} available
+                </Text>
+              </View>
+            </>
+          )}
         </ScrollView>
       </SafeAreaView>
     );
   }
 
-  // ── Quiz screen ────────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RESULTS SCREEN
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  if (phase === 'done') {
+    const perfect = correctCount === questions.length && wrongCount === 0;
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <StatusBar style="dark" translucent={false} backgroundColor="#F4F6FB" />
+        <ScrollView contentContainerStyle={styles.inner} showsVerticalScrollIndicator={false}>
+
+          <LinearGradient
+            colors={['#7B61FF', '#9B6FE8', '#C850C0']}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+            style={styles.banner}
+          >
+            <View style={[styles.bannerRow, isRTL && { flexDirection: 'row-reverse' }]}>
+              <View style={styles.bannerLeft}>
+                <Text style={[styles.bannerEyebrow, isRTL && { textAlign: 'right' }]}>QUIZ COMPLETE</Text>
+                <Text style={[styles.bannerTitle,   isRTL && { textAlign: 'right' }]}>
+                  {perfect ? t('quiz.perfect') : t('quiz.wellDone')}
+                </Text>
+              </View>
+              <Ionicons name={perfect ? 'trophy' : 'star'} size={40} color="rgba(255,255,255,0.9)" />
+            </View>
+          </LinearGradient>
+
+          <View style={styles.xpHeadline}>
+            <View style={styles.xpIconWrap}>
+              <Ionicons name="flash" size={22} color="#F59E0B" />
+            </View>
+            <Text style={styles.xpHeadlineText}>+{score} XP earned</Text>
+          </View>
+
+          <View style={styles.statsCard}>
+            <View style={[styles.statsRow, isRTL && { flexDirection: 'row-reverse' }]}>
+              <View style={styles.statItem}>
+                <View style={[styles.statIconWrap, { backgroundColor: '#ECFDF5' }]}>
+                  <Ionicons name="checkmark-circle" size={22} color="#4DBFA0" />
+                </View>
+                <Text style={styles.statValue}>{correctCount}</Text>
+                <Text style={styles.statLabel}>Correct</Text>
+              </View>
+
+              <View style={styles.statDivider} />
+
+              <View style={styles.statItem}>
+                <View style={[styles.statIconWrap, { backgroundColor: '#FFF0EF' }]}>
+                  <Ionicons name="close-circle" size={22} color="#E8706A" />
+                </View>
+                <Text style={styles.statValue}>{wrongCount}</Text>
+                <Text style={styles.statLabel}>Wrong tries</Text>
+              </View>
+
+              <View style={styles.statDivider} />
+
+              <View style={styles.statItem}>
+                <View style={[styles.statIconWrap, { backgroundColor: '#FFF8E0' }]}>
+                  <Ionicons name="flame" size={22} color="#F5C842" />
+                </View>
+                <Text style={styles.statValue}>{bestStreak}</Text>
+                <Text style={styles.statLabel}>Best streak</Text>
+              </View>
+            </View>
+          </View>
+
+          <TouchableOpacity onPress={handlePlayAgain} activeOpacity={0.88} style={styles.gradientTouch}>
+            <LinearGradient
+              colors={['#7B61FF', '#C850C0', '#FF6B9D']}
+              start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+              style={[styles.gradientBtn, isRTL && { flexDirection: 'row-reverse' }]}
+            >
+              <Ionicons name="refresh" size={18} color="#FFFFFF" />
+              <Text style={styles.gradientBtnText}>Play again</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.backBtn, isRTL && { flexDirection: 'row-reverse' }]}
+            onPress={() => navigation.navigate('Words')}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="book-outline" size={18} color="#7B61FF" />
+            <Text style={styles.backBtnText}>Back to words</Text>
+          </TouchableOpacity>
+
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ACTIVE QUIZ
+  // ═══════════════════════════════════════════════════════════════════════════
 
   const currentQ  = questions[currentIdx];
-  const isCorrect = inputState === 'correct';
-  const isWrong   = inputState === 'wrong';
+  const isDeToTr  = quizMode === 'de_to_tr';
+  const isCorrect = answerState === 'correct';
+  const isWrong   = answerState === 'wrong';
 
-  const inputBorderColor = isCorrect ? '#10B981' : isWrong ? '#EF4444' : '#E5E7EB';
-  const inputBgColor     = isCorrect ? '#ECFDF5' : isWrong  ? '#FEF2F2' : '#FFFFFF';
+  const inputBorderColor =
+    isCorrect    ? '#4DBFA0' :
+    isWrong      ? '#E8706A' :
+    inputFocused ? '#7B61FF' :
+    '#E8E8F0';
+  const inputBgColor =
+    isCorrect ? '#F0FBF8' :
+    isWrong   ? '#FFF5F5' :
+    '#FFFFFF';
+  const inputTextColor =
+    isCorrect ? '#4DBFA0' :
+    isWrong   ? '#E8706A' :
+    '#1A1A2E';
 
-  const modeLabel = currentQ.isSentence
-    ? (currentQ.mode === 'de_to_ar' ? t('quiz.typeArabicSent') : t('quiz.typeGermanSent'))
-    : (currentQ.mode === 'de_to_ar' ? t('quiz.toArabic') : t('quiz.toGerman'));
+  const cardTranslateY = cardEnterAnim.interpolate({ inputRange: [0, 1], outputRange: [40, 0] });
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <StatusBar style="dark" translucent={false} backgroundColor="#F4F6FB" />
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView
           contentContainerStyle={styles.inner}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Header */}
-          <View style={[styles.headerRow, isRTL && { flexDirection: 'row-reverse' }]}>
-            <View>
-              <Text style={styles.title}>{t('quiz.title')}</Text>
-              <Text style={styles.subtitle}>{t('quiz.subtitle')}</Text>
-            </View>
-            <View style={styles.scorePill}>
-              <Text style={styles.scoreNum}>{score}</Text>
-              <Text style={styles.scoreOf}> / {questions.length}</Text>
-            </View>
-          </View>
 
-          {/* Progress bar */}
+          {/* ── Banner ── */}
+          <LinearGradient
+            colors={['#7B61FF', '#9B6FE8', '#C850C0']}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+            style={styles.banner}
+          >
+            <View style={[styles.bannerRow, isRTL && { flexDirection: 'row-reverse' }]}>
+              <View style={styles.bannerLeft}>
+                <Text style={[styles.bannerEyebrow, isRTL && { textAlign: 'right' }]}>
+                  {t('quiz.subtitle').toUpperCase()}
+                </Text>
+                <Text style={[styles.bannerTitle, isRTL && { textAlign: 'right' }]}>
+                  {t('quiz.title')}
+                </Text>
+              </View>
+              <View style={styles.scoreBubble}>
+                <Text style={styles.scoreBubbleNum}>{score}</Text>
+                <Text style={styles.scoreBubbleLabel}>XP</Text>
+              </View>
+            </View>
+          </LinearGradient>
+
+          {/* ── Progress bar ── */}
           <View style={styles.progressRow}>
             {questions.map((_, i) => (
-              <View
-                key={i}
-                style={[
-                  styles.progressSeg,
-                  i === currentIdx && styles.progressSegActive,
-                  i < currentIdx  && styles.progressSegDone,
-                ]}
-              />
+              <View key={i} style={[
+                styles.progressSeg,
+                i === currentIdx && styles.progressSegActive,
+                i < currentIdx  && styles.progressSegDone,
+              ]} />
             ))}
           </View>
 
-          {/* Question card */}
-          <View style={styles.questionCard}>
-            <View style={[styles.modeBadge, isRTL && { flexDirection: 'row-reverse' }]}>
-              <Ionicons
-                name={currentQ.mode === 'de_to_ar' ? 'arrow-forward' : 'arrow-back'}
-                size={12}
-                color="#8B5CF6"
-              />
-              <Text style={styles.modeBadgeText}>{modeLabel}</Text>
-            </View>
+          {/* ── Question count ── */}
+          <Text style={[styles.questionCount, isRTL && { textAlign: 'right' }]}>
+            {currentIdx + 1} / {questions.length}
+          </Text>
 
-            <Text
-              style={[
-                styles.questionWord,
-                currentQ.mode === 'ar_to_de' && styles.questionWordArabic,
-                currentQ.isSentence           && styles.questionWordSentence,
-              ]}
+          {/* ══════════════════════════════════════════
+              PREMIUM WORD CARD
+          ══════════════════════════════════════════ */}
+          <Animated.View style={[
+            styles.wordCardOuter,
+            { opacity: cardEnterAnim, transform: [{ translateY: cardTranslateY }] },
+          ]}>
+            <LinearGradient
+              colors={['#6B4FD8', '#9B59E8', '#C850C0']}
+              start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+              style={styles.wordCardGradient}
             >
-              {currentQ.prompt}
-            </Text>
+              <View style={[styles.blob, styles.blob1]} />
+              <View style={[styles.blob, styles.blob2]} />
+              <View style={[styles.blob, styles.blob3]} />
+              <View style={[styles.blob, styles.blob4]} />
+              <View style={[styles.blob, styles.blob5]} />
 
-            <TouchableOpacity
-              style={[styles.listenBtn, isPlaying && styles.listenBtnActive, isRTL && { flexDirection: 'row-reverse' }]}
-              onPress={() => handleListen(currentQ.germanWord)}
-              activeOpacity={0.7}
-            >
-              <Ionicons
-                name={isPlaying ? 'volume-high' : 'volume-medium-outline'}
-                size={15}
-                color={isPlaying ? '#FFFFFF' : '#8B5CF6'}
-              />
-              <Text style={[styles.listenBtnText, isPlaying && styles.listenBtnTextActive]}>
-                {isPlaying ? t('sentences.playing') : t('sentences.listen')}
-              </Text>
-            </TouchableOpacity>
-          </View>
+              <View style={styles.glassCard}>
+                <View style={styles.wordBadge}>
+                  <Text style={styles.wordBadgeText}>
+                    {isDeToTr ? 'What does this mean?' : 'How do you say this in German?'}
+                  </Text>
+                </View>
 
-          {/* Input field */}
-          <Animated.View
-            style={[
+                <Text style={[styles.wordCardWord, !isDeToTr && styles.wordCardWordArabic]}>
+                  {isDeToTr ? currentQ.german : currentQ.translation}
+                </Text>
+
+                {isDeToTr && currentQ.article && ARTICLE_PILL[currentQ.article] && (
+                  <View style={[styles.articleInfoPill, { backgroundColor: ARTICLE_PILL[currentQ.article].bg }]}>
+                    <Text style={[styles.articleInfoText, { color: ARTICLE_PILL[currentQ.article].color }]}>
+                      {currentQ.article}
+                    </Text>
+                  </View>
+                )}
+
+                {!isDeToTr && currentQ.article && (
+                  <Text style={styles.nounHint}>(noun)</Text>
+                )}
+
+                {isDeToTr && (
+                  <TouchableOpacity
+                    style={[styles.wordCardListenBtn, isPlaying && styles.wordCardListenBtnActive]}
+                    onPress={() => handleListen(currentQ.german)}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons
+                      name={isPlaying ? 'volume-high' : 'volume-medium-outline'}
+                      size={18}
+                      color={isPlaying ? '#FFFFFF' : '#7B61FF'}
+                    />
+                    <Text style={[styles.wordCardListenText, isPlaying && styles.wordCardListenTextActive]}>
+                      {isPlaying ? 'Playing…' : 'Listen'}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </LinearGradient>
+          </Animated.View>
+
+          {/* ══════════════════════════════════════════
+              INPUT SECTION
+          ══════════════════════════════════════════ */}
+          <Text style={[styles.inputLabel, isRTL && { textAlign: 'right' }]}>
+            {isDeToTr ? 'TYPE THE TRANSLATION' : 'TYPE THE GERMAN WORD'}
+          </Text>
+
+          <View style={[styles.inputRow, isRTL && { flexDirection: 'row-reverse' }]}>
+            <Animated.View style={[
               styles.inputWrapper,
               {
                 borderColor:     inputBorderColor,
                 backgroundColor: inputBgColor,
                 transform: [{ translateX: shakeAnim }],
               },
-            ]}
-          >
-            <TextInput
-              ref={inputRef}
-              style={styles.textInput}
-              placeholder={t('quiz.placeholder')}
-              placeholderTextColor="#C0C0CC"
-              value={userInput}
-              onChangeText={handleInputChange}
-              editable={!isCorrect}
-              autoCapitalize="none"
-              autoCorrect={false}
-              blurOnSubmit={false}
-              returnKeyType="done"
-              onSubmitEditing={!isCorrect ? handleSubmit : undefined}
-            />
-            {isCorrect && (
-              <Ionicons name="checkmark-circle" size={22} color="#10B981" style={styles.inputStatusIcon} />
-            )}
-            {isWrong && (
-              <Ionicons name="close-circle" size={22} color="#EF4444" style={styles.inputStatusIcon} />
-            )}
-          </Animated.View>
+            ]}>
+              <TextInput
+                ref={inputRef}
+                style={[styles.textInput, { color: inputTextColor }, isRTL && { textAlign: 'right' }]}
+                placeholder={isDeToTr ? 'Type translation…' : 'Type German word…'}
+                placeholderTextColor="#C0C0CC"
+                value={inputValue}
+                onChangeText={(text) => {
+                  setInputValue(text);
+                  // Typing after a wrong answer clears the wrong state immediately
+                  if (answerState === 'wrong') {
+                    setAnswerState('idle');
+                    if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+                  }
+                }}
+                onFocus={() => setInputFocused(true)}
+                onBlur={() => setInputFocused(false)}
+                editable={answerState !== 'correct'}
+                autoCapitalize="none"
+                autoCorrect={false}
+                blurOnSubmit={false}
+                returnKeyType="done"
+                onSubmitEditing={answerState === 'idle' ? handleSubmit : undefined}
+              />
+            </Animated.View>
 
-          {/* Feedback */}
+            {/* Submit arrow — hidden when correct (Next button takes over) */}
+            {!isCorrect && (
+              <TouchableOpacity
+                onPress={handleSubmit}
+                activeOpacity={0.88}
+                disabled={!inputValue.trim() || answerState !== 'idle'}
+                style={[
+                  styles.submitBtnTouch,
+                  (!inputValue.trim() || answerState !== 'idle') && { opacity: 0.4 },
+                ]}
+              >
+                <LinearGradient
+                  colors={['#7B61FF', '#FF6B9D']}
+                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+                  style={styles.submitBtn}
+                >
+                  <Ionicons name="arrow-forward" size={24} color="#FFFFFF" />
+                </LinearGradient>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* ── Inline feedback ── */}
           {isCorrect && (
-            <View style={styles.feedbackBox}>
-              <Ionicons name="checkmark-circle" size={18} color="#059669" />
-              <Text style={styles.feedbackTextCorrect}>{t('quiz.correct')} ✅</Text>
+            <View style={[styles.feedbackBox, styles.feedbackCorrect, isRTL && { flexDirection: 'row-reverse' }]}>
+              <Ionicons name="checkmark-circle" size={20} color="#4DBFA0" />
+              <Text style={styles.feedbackCorrectText}>Richtig!</Text>
             </View>
           )}
           {isWrong && (
-            <View style={styles.feedbackBoxWrong}>
-              <Ionicons name="close-circle" size={18} color="#DC2626" />
-              <Text style={styles.feedbackTextWrong}>{t('quiz.wrong')} ❌  {retryMsg}</Text>
+            <View style={[styles.feedbackBox, styles.feedbackWrong, isRTL && { flexDirection: 'row-reverse' }]}>
+              <Ionicons name="close-circle" size={20} color="#E8706A" />
+              <Text style={styles.feedbackWrongText}>Falsch! — try again</Text>
             </View>
           )}
 
-          {/* Submit button */}
-          {!isCorrect && (
-            <TouchableOpacity
-              style={[styles.submitButton, !userInput.trim() && styles.submitButtonDisabled]}
-              onPress={handleSubmit}
-              activeOpacity={0.85}
-              disabled={!userInput.trim()}
-            >
-              <Text style={styles.submitButtonText}>{t('quiz.submit')}</Text>
+          {/* ── Next button (only after correct) ── */}
+          {isCorrect && (
+            <TouchableOpacity onPress={handleNext} activeOpacity={0.88} style={[styles.gradientTouch, { marginTop: 8 }]}>
+              <LinearGradient
+                colors={['#4DBFA0', '#2E9E80']}
+                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                style={[styles.gradientBtn, isRTL && { flexDirection: 'row-reverse' }]}
+              >
+                <Text style={styles.gradientBtnText}>
+                  {currentIdx + 1 >= questions.length ? t('quiz.seeResults') : t('quiz.next')}
+                </Text>
+                <Ionicons name={isRTL ? 'chevron-back' : 'chevron-forward'} size={16} color="#FFFFFF" />
+              </LinearGradient>
             </TouchableOpacity>
           )}
 
-          {/* Next / Results button */}
-          {isCorrect && (
-            <TouchableOpacity
-              style={styles.nextButton}
-              onPress={handleNext}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.nextButtonText}>
-                {currentIdx + 1 >= questions.length ? t('quiz.seeResults') : t('quiz.next')}
-              </Text>
-              <Ionicons name="chevron-forward" size={16} color="#FFFFFF" />
-            </TouchableOpacity>
-          )}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -548,255 +700,127 @@ const styles = StyleSheet.create({
   centered:  { flex: 1, justifyContent: 'center', alignItems: 'center' },
   inner:     { padding: 20, paddingTop: 20, paddingBottom: 60 },
 
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 20,
-  },
-  title:    { fontSize: 30, fontWeight: '700', color: '#1A1A2E', marginBottom: 2 },
-  subtitle: { fontSize: 14, color: '#9CA3AF' },
+  banner:        { borderRadius: 24, padding: 22, marginBottom: 16 },
+  bannerRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  bannerLeft:    { flex: 1 },
+  bannerEyebrow: { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.7)', letterSpacing: 1.5, marginBottom: 5 },
+  bannerTitle:   { fontSize: 28, fontWeight: '800', color: '#FFFFFF', letterSpacing: -0.3 },
 
-  scorePill: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    backgroundColor: '#EEF2FF',
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  scoreNum: { fontSize: 22, fontWeight: '800', color: '#4F46E5' },
-  scoreOf:  { fontSize: 14, fontWeight: '600', color: '#A5B4FC' },
-
-  progressRow: { flexDirection: 'row', gap: 5, marginBottom: 20 },
-  progressSeg: {
-    flex: 1,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: '#E5E7EB',
-  },
-  progressSegActive: { backgroundColor: '#6366F1' },
-  progressSegDone:   { backgroundColor: '#A5B4FC' },
-
-  questionCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    padding: 28,
-    marginBottom: 16,
-    alignItems: 'center',
-    shadowColor: '#6366F1',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 14,
-    elevation: 4,
-  },
-  modeBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: '#F5F3FF',
-    borderRadius: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    marginBottom: 20,
-  },
-  modeBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#8B5CF6',
-    letterSpacing: 1.2,
-  },
-  questionWord: {
-    fontSize: 42,
-    fontWeight: '800',
-    color: '#1A1A2E',
-    letterSpacing: -0.5,
-    textAlign: 'center',
-    marginBottom: 24,
-  },
-  questionWordArabic: {
-    fontSize: 32,
-    lineHeight: 48,
-    letterSpacing: 0,
-    writingDirection: 'rtl',
-  },
-  questionWordSentence: {
-    fontSize: 20,
-    fontWeight: '700',
-    lineHeight: 30,
-    letterSpacing: 0,
-  },
-  listenBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#F5F3FF',
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  listenBtnActive: { backgroundColor: '#8B5CF6' },
-  listenBtnText: { fontSize: 13, fontWeight: '600', color: '#8B5CF6' },
-  listenBtnTextActive: { color: '#FFFFFF' },
-
-  inputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  scoreBubble: {
+    backgroundColor: 'rgba(255,255,255,0.22)',
     borderRadius: 16,
-    borderWidth: 2,
-    paddingHorizontal: 16,
-    paddingVertical: 2,
-    marginBottom: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    alignItems: 'center',
+    marginLeft: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
   },
-  textInput: {
-    flex: 1,
-    fontSize: 18,
-    fontWeight: '500',
-    color: '#1A1A2E',
-    paddingVertical: 14,
-    padding: 0,
-  },
-  inputStatusIcon: { marginLeft: 8 },
+  scoreBubbleNum:   { fontSize: 22, fontWeight: '800', color: '#FFFFFF', lineHeight: 26 },
+  scoreBubbleLabel: { fontSize: 11, fontWeight: '600', color: 'rgba(255,255,255,0.75)' },
 
+  progressRow:       { flexDirection: 'row', gap: 6, marginBottom: 10 },
+  progressSeg:       { flex: 1, height: 6, borderRadius: 3, backgroundColor: '#E2E5F0' },
+  progressSegActive: { backgroundColor: '#7B61FF' },
+  progressSegDone:   { backgroundColor: '#C4B5FD' },
+
+  questionCount: { fontSize: 13, fontWeight: '600', color: '#9090A0', marginBottom: 14 },
+
+  // Mode selector
+  modeHeading:   { fontSize: 20, fontWeight: '700', color: '#1A1A2E', marginBottom: 16 },
+  modeGrid:      { flexDirection: 'row', gap: 12, marginBottom: 20 },
+  modeCardTouch: { flex: 1, borderRadius: 20, overflow: 'hidden', shadowColor: '#7B61FF', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.2, shadowRadius: 14, elevation: 6 },
+  modeCard:      { borderRadius: 20, padding: 20, minHeight: 160, justifyContent: 'flex-end' },
+  modeCardFlag:  { fontSize: 22, marginBottom: 10 },
+  modeCardTitle: { fontSize: 15, fontWeight: '700', color: '#FFFFFF', marginBottom: 6, lineHeight: 20 },
+  modeCardSub:   { fontSize: 12, color: 'rgba(255,255,255,0.8)', lineHeight: 16 },
+  wordCountPill: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'center', backgroundColor: '#F0EDFF', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7 },
+  wordCountText: { fontSize: 13, color: '#9090A0', fontWeight: '500' },
+
+  // Word card
+  wordCardOuter:    { width: '100%', borderRadius: 32, overflow: 'hidden', marginBottom: 0, minHeight: 220, shadowColor: '#6B4FD8', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.25, shadowRadius: 20, elevation: 10 },
+  wordCardGradient: { borderRadius: 32, overflow: 'hidden', minHeight: 220, position: 'relative' },
+  blob:  { position: 'absolute' },
+  blob1: { width: 120, height: 120, borderRadius: 60, backgroundColor: 'rgba(255,255,255,0.12)', top: -30, left: -30 },
+  blob2: { width: 90,  height: 90,  borderRadius: 45, backgroundColor: '#C850C0', opacity: 0.35, top: 10, right: 20 },
+  blob3: { width: 70,  height: 70,  borderRadius: 35, backgroundColor: '#4DBFA0', opacity: 0.25, bottom: 15, left: 25 },
+  blob4: { width: 50,  height: 50,  borderRadius: 25, backgroundColor: 'rgba(255,255,255,0.08)', bottom: -10, right: 30 },
+  blob5: { width: 40,  height: 40,  borderRadius: 20, backgroundColor: '#FF6B9D', opacity: 0.2, top: '40%', left: 60 },
+  glassCard: {
+    margin: 20,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 20,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
+    alignItems: 'center',
+    zIndex: 2,
+  },
+  wordBadge:     { backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 50, paddingHorizontal: 14, paddingVertical: 5, marginBottom: 14 },
+  wordBadgeText: { fontSize: 12, color: 'rgba(255,255,255,0.9)', fontWeight: '500' },
+  wordCardWord:        { fontSize: 48, fontWeight: '800', color: '#FFFFFF', textAlign: 'center', letterSpacing: -1, textShadowColor: 'rgba(0,0,0,0.2)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 4, marginBottom: 10 },
+  wordCardWordArabic:  { fontSize: 34, lineHeight: 48, letterSpacing: 0 },
+  articleInfoPill:     { borderRadius: 50, paddingHorizontal: 12, paddingVertical: 4, marginBottom: 12 },
+  articleInfoText:     { fontSize: 13, fontWeight: '700' },
+  nounHint:            { fontSize: 13, color: 'rgba(255,255,255,0.55)', fontStyle: 'italic', marginBottom: 12 },
+  wordCardListenBtn:       { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: 50, paddingHorizontal: 22, paddingVertical: 10, alignSelf: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 4 },
+  wordCardListenBtnActive: { backgroundColor: '#7B61FF' },
+  wordCardListenText:       { fontSize: 14, fontWeight: '700', color: '#7B61FF' },
+  wordCardListenTextActive: { color: '#FFFFFF' },
+
+  // Input
+  inputLabel: { fontSize: 11, fontWeight: '600', letterSpacing: 1.4, color: '#9090A0', marginTop: 24, marginBottom: 10 },
+  inputRow:   { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  inputWrapper: {
+    flex: 1,
+    height: 62,
+    borderRadius: 18,
+    borderWidth: 2,
+    paddingHorizontal: 20,
+    justifyContent: 'center',
+  },
+  textInput: { fontSize: 20, fontWeight: '600', padding: 0 },
+  submitBtnTouch: { borderRadius: 18, overflow: 'hidden', shadowColor: '#7B61FF', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 5 },
+  submitBtn:      { width: 62, height: 62, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+
+  // Inline feedback
   feedbackBox: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: '#ECFDF5',
-    borderRadius: 12,
+    borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 12,
-    marginBottom: 16,
+    marginTop: 12,
   },
-  feedbackTextCorrect: { fontSize: 15, fontWeight: '600', color: '#059669' },
-  feedbackBoxWrong: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#FEF2F2',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    marginBottom: 16,
-  },
-  feedbackTextWrong: { fontSize: 15, fontWeight: '600', color: '#DC2626', flex: 1 },
+  feedbackCorrect:     { backgroundColor: '#ECFDF5', borderWidth: 1, borderColor: '#A7F3D0' },
+  feedbackWrong:       { backgroundColor: '#FFF0EF', borderWidth: 1, borderColor: '#FCD0C8' },
+  feedbackCorrectText: { fontSize: 15, fontWeight: '700', color: '#4DBFA0' },
+  feedbackWrongText:   { fontSize: 15, fontWeight: '700', color: '#E8706A' },
 
-  submitButton: {
-    borderRadius: 16,
-    paddingVertical: 16,
-    alignItems: 'center',
-    backgroundColor: '#6366F1',
-    shadowColor: '#6366F1',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
-    marginBottom: 12,
-  },
-  submitButtonDisabled: { backgroundColor: '#E5E7EB', shadowOpacity: 0, elevation: 0 },
-  submitButtonText: { color: '#FFFFFF', fontSize: 17, fontWeight: '700' },
+  // Gradient buttons
+  gradientTouch:  { borderRadius: 18, overflow: 'hidden', marginBottom: 14, shadowColor: '#7B61FF', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 10, elevation: 5 },
+  gradientBtn:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 17, paddingHorizontal: 20, gap: 8 },
+  gradientBtnText:{ color: '#FFFFFF', fontSize: 17, fontWeight: '700', letterSpacing: 0.2 },
 
-  nextButton: {
-    borderRadius: 16,
-    paddingVertical: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 8,
-    backgroundColor: '#10B981',
-    shadowColor: '#10B981',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
-    marginBottom: 12,
-  },
-  nextButtonText: { color: '#FFFFFF', fontSize: 17, fontWeight: '700' },
+  backBtn:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 16, borderRadius: 18, backgroundColor: '#FFFFFF', borderWidth: 2, borderColor: '#E8E0FF' },
+  backBtnText: { fontSize: 16, fontWeight: '700', color: '#7B61FF' },
 
-  resultCard: {
-    borderRadius: 24,
-    padding: 36,
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  resultIconWrap: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  resultTitle: { fontSize: 26, fontWeight: '800', color: '#FFFFFF', marginBottom: 12 },
-  resultScore: { fontSize: 56, fontWeight: '800', color: '#FFFFFF', lineHeight: 64 },
-  resultScoreOf: { fontSize: 32, fontWeight: '600', color: 'rgba(255,255,255,0.7)' },
-  resultScoreLabel: {
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.8)',
-    fontWeight: '500',
-    marginTop: 4,
-  },
+  // Results screen
+  xpHeadline:     { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#FFFFFF', borderRadius: 20, padding: 18, marginBottom: 14, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 2 },
+  xpIconWrap:     { width: 42, height: 42, borderRadius: 12, backgroundColor: '#FEF9C3', alignItems: 'center', justifyContent: 'center' },
+  xpHeadlineText: { fontSize: 20, fontWeight: '800', color: '#1A1A2E' },
+  statsCard:      { backgroundColor: '#FFFFFF', borderRadius: 24, padding: 20, marginBottom: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 10, elevation: 3 },
+  statsRow:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around' },
+  statItem:       { alignItems: 'center', flex: 1 },
+  statIconWrap:   { width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+  statValue:      { fontSize: 28, fontWeight: '800', color: '#1A1A2E', lineHeight: 32 },
+  statLabel:      { fontSize: 12, color: '#9090A0', fontWeight: '500', marginTop: 2 },
+  statDivider:    { width: 1, height: 60, backgroundColor: '#F0F0F8' },
 
-  xpCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 18,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  xpRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  xpIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: '#FEF9C3',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  xpEarned: { fontSize: 17, fontWeight: '700', color: '#1A1A2E', marginBottom: 2 },
-  xpSub:    { fontSize: 13, color: '#9CA3AF' },
-
-  restartButton: {
-    borderRadius: 16,
-    paddingVertical: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 8,
-    backgroundColor: '#6366F1',
-    shadowColor: '#6366F1',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
-  },
-  restartButtonText: { color: '#FFFFFF', fontSize: 17, fontWeight: '700' },
-
-  emptyCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    padding: 36,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
-    elevation: 3,
-  },
-  emptyIconWrap: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#F3F4F6',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 18,
-  },
-  emptyTitle: { fontSize: 20, fontWeight: '700', color: '#1A1A2E', marginBottom: 10 },
-  emptyBody:  { fontSize: 15, color: '#6B7280', textAlign: 'center', lineHeight: 22 },
+  // Empty state
+  emptyCard:    { backgroundColor: '#FFFFFF', borderRadius: 24, padding: 36, alignItems: 'center', shadowColor: '#7B61FF', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.07, shadowRadius: 12, elevation: 3 },
+  emptyIconWrap:{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center', marginBottom: 18 },
+  emptyTitle:   { fontSize: 20, fontWeight: '700', color: '#1A1A2E', marginBottom: 10 },
+  emptyBody:    { fontSize: 15, color: '#9CA3AF', textAlign: 'center', lineHeight: 23 },
 });
