@@ -2,7 +2,7 @@
   "expo": {
     "name": "Haarlos",
     "slug": "almand-app",
-    "icon": "./assets/almad.jpeg",
+    "icon": "./assets/alamd.jpeg",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -17,12 +17,12 @@
         "android.permission.RECORD_AUDIO"
       ],
       "adaptiveIcon": {
-        "foregroundImage": "./assets/almad.jpeg",
+        "foregroundImage": "./assets/alamd.jpeg",
         "backgroundColor": "#ffffff"
       }
     },
     "splash": {
-      "image": "./assets/almad.jpeg",
+      "image": "./assets/alamd.jpeg",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },

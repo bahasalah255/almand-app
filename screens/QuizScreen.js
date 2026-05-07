@@ -49,7 +49,7 @@ function buildQuestions(words) {
       mode,
       prompt:     mode === 'de_to_ar' ? word.word        : word.translation,
       answer:     mode === 'de_to_ar' ? word.translation : word.word,
-      germanWord: word.word,
+      germanWord: word.article ? `${word.article} ${word.word}` : word.word,
       isSentence: false,
     };
   });
@@ -72,7 +72,7 @@ function buildFocusedQuestion(focusItem) {
       mode,
       prompt:     mode === 'de_to_ar' ? focusItem.word        : focusItem.translation,
       answer:     mode === 'de_to_ar' ? focusItem.translation : focusItem.word,
-      germanWord: focusItem.word,
+      germanWord: focusItem.article ? `${focusItem.article} ${focusItem.word}` : focusItem.word,
       isSentence: false,
     };
   }
